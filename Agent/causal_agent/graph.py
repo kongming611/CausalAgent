@@ -118,7 +118,7 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession"):
 
 
     app = workflow.compile(
-        checkpointer=checkpointer  #
+        checkpointer=checkpointer  
     )
     
     return app

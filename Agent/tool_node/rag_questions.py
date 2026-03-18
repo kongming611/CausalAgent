@@ -33,6 +33,9 @@ def get_rag_questions(
             
             你是一个因果数据分析领域的专家，你的任务是根据用户的对话历史和当前的数据摘要，识别出其中需要通过知识库进行澄清的关键概念或潜在问题，提出{num_questions}个问题
 
+            # 历史信息
+            {messages}
+            
             # 数据摘要:
             {data_summary}
 

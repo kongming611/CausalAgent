@@ -282,7 +282,7 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
 
         # 针对建议，生成提示
         if recommends:
-            recommend_message = AIMessage(content=f"决策：信息完备，进入预处理节点。温馨提示：\n- {recommends}")
+            recommend_message = AIMessage(content=f"决策：信息完备，进入预处理节点。提示：\n- {recommends}")
             new_messages.append(recommend_message)
         
         return {"messages": new_messages, 
