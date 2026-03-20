@@ -142,7 +142,6 @@ class foldQuery(BaseModel):
 from Agent.Processing.fold_processing import get_data_summary
 from Agent.Processing.fold_verify import validate_analysis
 from Agent.Processing.data_visualize import generate_visualizations
-from Agent.knowledge_base.query_rag import get_rag_response
 
 
 def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
@@ -424,6 +423,7 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     }
 
 
+from Agent.knowledge_base.query_rag import format_rag_summary_for_prompt
 from Agent.tool_node.causal_analysis_task import causal_analysis_task
 from Agent.tool_node.rag_query_task import rag_query_task
 from Agent.tool_node.rag_questions import get_rag_questions
@@ -678,12 +678,18 @@ def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     mapping_data = metadata_mapping(meta_data, state.get("visualizations", {}))
     
     # 在invoke时，将模板变量和消息历史分开传入
+    knowledge_summary = format_rag_summary_for_prompt(
+        state.get("knowledge_base_result", {}),
+        max_questions=3,
+        include_evidence=True
+    )
+
     response = runnable.invoke({
         "messages": state["messages"],
         "preprocess_meta_data": meta_data,
         "preprocess_summary": state.get("preprocess_summary", {}),
         "causal_analysis_result": state.get("causal_analysis_result", {}),
-        "knowledge_base_result": state.get("knowledge_base_result", {}),
+        "knowledge_base_result": knowledge_summary,
         "postprocess_result": state.get("postprocess_result", {}),
         "system_role": causal_report_prompt()
     })
@@ -769,10 +775,16 @@ def inquiry_answer_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         ]
     )
     runnable = prompt | llm | StrOutputParser()
+    knowledge_summary = format_rag_summary_for_prompt(
+        state.get("knowledge_base_result", {}),
+        max_questions=2,
+        include_evidence=True
+    )
+
     response = runnable.invoke({
         "messages": state["messages"],
         "causal_analysis_result": state.get("causal_analysis_result", {}),
-        "knowledge_base_result": state.get("knowledge_base_result", {}),
+        "knowledge_base_result": knowledge_summary,
         "postprocess_result": state.get("postprocess_result", {}),
         "final_report": state.get("final_report", {}),
         "system_role": causal_prompt()

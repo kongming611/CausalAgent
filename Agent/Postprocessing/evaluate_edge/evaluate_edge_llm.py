@@ -3,6 +3,7 @@ from typing import List, Tuple, Literal, Dict
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from Agent.causal_agent.state import CausalChatState
+from Agent.knowledge_base.query_rag import get_rag_excerpt
 import json
 import logging
 
@@ -47,10 +48,8 @@ def evaluate_edges_with_llm(
         return err_evaluation
     
     analysis_parameters = state.get("analysis_parameters", "无可用数据摘要")
-    knowledge_base_result = state.get("knowledge_base_result", "无可用领域知识")
-    
-    # 简化知识库结果
-    knowledge_excerpt = knowledge_base_result[:500] if isinstance(knowledge_base_result, str) else str(knowledge_base_result)[:500]
+    knowledge_base_result = state.get("knowledge_base_result", {})
+    knowledge_excerpt = get_rag_excerpt(knowledge_base_result, max_chars=500)
     
     
     logging.info(f"开始LLM评估 {len(critical_edges)} 条关键边...")

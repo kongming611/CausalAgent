@@ -4,6 +4,7 @@ import numpy as np
 from langchain_openai import ChatOpenAI
 from langchain_core.prompts import ChatPromptTemplate
 from Agent.causal_agent.state import CausalChatState
+from Agent.knowledge_base.query_rag import get_rag_excerpt
 import json
 import logging
 
@@ -47,10 +48,8 @@ def fix_cycles_with_llm(
     
     # 获取上下文信息
     analysis_parameters = state.get("analysis_parameters", {})
-    knowledge_base_result = state.get("knowledge_base_result", "无可用领域知识")
-    
-    # 简化知识库结果（截取前500字符）
-    knowledge_excerpt = knowledge_base_result[:500] if isinstance(knowledge_base_result, str) else str(knowledge_base_result)[:500]
+    knowledge_base_result = state.get("knowledge_base_result", {})
+    knowledge_excerpt = get_rag_excerpt(knowledge_base_result, max_chars=500)
     
     for idx, cycle in enumerate(cycles):
         try:
