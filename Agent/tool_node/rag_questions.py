@@ -1,84 +1,115 @@
-from langgraph.func import task
-from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.output_parsers import JsonOutputParser
-from pydantic import BaseModel, Field
-from typing import List
-import logging
 import json
-from Agent.causal_agent.state import CausalChatState
-from Agent.causal_agent.back_prompt import causal_rag_prompt
+import logging
+from typing import Dict, List, Literal
+
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.messages import BaseMessage
 from langchain_openai import ChatOpenAI
+from langgraph.func import task
+from pydantic import BaseModel, Field
+
+from Agent.causal_agent.back_prompt import causal_rag_prompt
+from Agent.causal_agent.state import CausalChatState
 
 
-class RagQuestion(BaseModel):
-    """用于生成知识库查询问题的模型。"""
-    questions: List[str] = Field(
-        default_factory=list,
-        description="根据对话历史和数据摘要，为知识库生成一个或多个精确、具体的问题列表。"
+class RagQuestionItem(BaseModel):
+    """用于描述单个知识库查询问题。"""
+
+    question: str = Field(..., description="面向知识库的具体查询问题。")
+    intent: str = Field(..., description="这个问题服务的分析意图。")
+    priority: Literal["high", "medium", "low"] = Field(
+        ...,
+        description="这个问题对当前报告可信度的重要程度。",
     )
+    why_needed: str = Field(..., description="为什么需要查询这个问题。")
+
+
+class RagQuestionBundle(BaseModel):
+    """用于承载结构化RAG问题列表。"""
+
+    questions: List[RagQuestionItem] = Field(
+        default_factory=list,
+        description="根据对话历史和数据摘要生成的结构化知识库查询问题列表。",
+    )
+
+
+def _format_messages(messages: List[BaseMessage], max_messages: int = 6) -> str:
+    formatted_messages = []
+    for message in messages[-max_messages:]:
+        role = getattr(message, "type", message.__class__.__name__)
+        content = getattr(message, "content", "")
+        formatted_messages.append(f"[{role}] {content}")
+    return "\n".join(formatted_messages) if formatted_messages else "无可用对话历史。"
+
 
 @task
 def get_rag_questions(
     state: CausalChatState,
     llm: ChatOpenAI,
-    num_questions: int
-) -> List[str]:
-    
-    logging.info("正在启动 RAG 知识库查询...")
+    num_questions: int,
+) -> List[Dict]:
+    logging.info("正在启动 RAG 问题生成任务...")
     try:
-        rag_prompt = ChatPromptTemplate.from_messages([
-            ("system", 
-                """
-                system role: {system_role}
-            
-            你是一个因果数据分析领域的专家，你的任务是根据用户的对话历史和当前的数据摘要，识别出其中需要通过知识库进行澄清的关键概念或潜在问题，提出{num_questions}个问题
+        rag_prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    """
+system role: {system_role}
 
-            # 历史信息
-            {messages}
-            
-            # 数据摘要:
-            {data_summary}
+你是一个因果推断领域的知识管理专家。你的任务不是泛泛生成教材式问题，而是围绕当前分析任务，生成最能增强报告可信度的知识库查询问题。
 
-            # 数据预处理总结:
-            {preprocess_summary}
+# 最近对话
+{messages}
 
-            # 你的任务:
-            综合以上信息，生成一个包含多个个问题的JSON列表，并赋值给 'questions' 字段。这些问题应该简洁、明确，旨在从知识库中检索信息，以帮助用户更好地理解当前分析的背景、方法论或潜在风险。
+# 数据摘要
+{data_summary}
 
-            **你必须严格按照 `RagQuestion` 的 schema 返回一个 JSON 对象。**
-            **绝对不要在你的回复中包含任何Markdown格式或解释性文字。**
+# 预处理总结
+{preprocess_summary}
 
-            示例输出:
-            {{
-                "questions": ["什么是混杂因子，以及如何在因果分析中控制它？", "数据缺失在因果分析中会引入哪些类型的偏倚？", "在处理时间序列数据时，PC算法有哪些局限性？"]
-            }}
-            """),
-            ("human", "请根据上述指示和提供的数据摘要，生成问题列表。，注意请只生成json对象，不要包含任何其他文字。")
-        ])
-        
+# 生成目标
+1. 优先生成会增强报告可信度的问题，而不是泛泛介绍概念。
+2. 问题要能直接帮助解释方法假设、风险来源、算法局限或因果推断陷阱。
+3. 问题数量控制为 {num_questions} 个。
+4. 每个问题都必须说明意图、优先级和为什么需要查询。
+
+**你必须严格按照 `RagQuestionBundle` 的 schema 返回 JSON。**
+**不要输出任何Markdown或额外解释。**
+""",
+                ),
+                (
+                    "human",
+                    "请根据当前任务生成知识库查询问题。只返回 JSON 对象。",
+                ),
+            ]
+        )
+
         question_generator_runnable = rag_prompt | llm | JsonOutputParser()
-        
-        logging.info("正在调用LLM生成RAG查询问题...")
-        
-        llm_output = question_generator_runnable.invoke({
-            "messages": state["messages"],
-            "data_summary": json.dumps(state.get("analysis_parameters", {}), indent=2, ensure_ascii=False),
-            "preprocess_summary": state.get("preprocess_summary", ""),
-            "system_role": causal_rag_prompt(),
-            "num_questions": num_questions
-        })
+        logging.info("正在调用LLM生成结构化RAG查询问题...")
 
-        try:
-            response = RagQuestion.model_validate(llm_output)
+        llm_output = question_generator_runnable.invoke(
+            {
+                "messages": _format_messages(state["messages"]),
+                "data_summary": json.dumps(state.get("analysis_parameters", {}), indent=2, ensure_ascii=False),
+                "preprocess_summary": state.get("preprocess_summary", ""),
+                "system_role": causal_rag_prompt(),
+                "num_questions": num_questions,
+            }
+        )
 
-        except Exception as e:
-            logging.error(f"Could not parse JSON from LLM response: {e}\nRaw response: {llm_output}")
-            return ["无法生成RAG问题"]
-        
-        logging.info(f"LLM生成的RAG问题列表: {response.questions}")
-        
-        logging.info("RAG 知识库查询成功。")
-        return response.questions
-    except Exception as e:
-        logging.error(f"执行 RAG 查询时发生错误: {e}", exc_info=True)
-        return ["无法生成RAG问题"]
+        response = RagQuestionBundle.model_validate(llm_output)
+        questions = [question.model_dump() for question in response.questions]
+        logging.info(f"LLM生成的RAG问题列表: {questions}")
+        return questions
+    except Exception as exc:
+        logging.error(f"执行 RAG 问题生成时发生错误: {exc}", exc_info=True)
+        return [
+            {
+                "question": "当前分析流程可能涉及哪些关键的因果识别假设？",
+                "intent": "补充报告中的方法论假设说明",
+                "priority": "high",
+                "why_needed": "在问题生成失败时，至少保留一个能增强报告可信度的兜底问题。",
+            }
+        ]
