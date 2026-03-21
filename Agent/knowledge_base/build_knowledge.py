@@ -145,9 +145,6 @@ def build() -> None:
     """
     构建向量知识库：加载文档 -> 标准化metadata -> 切分 -> 向量化 -> 存储。
 
-    注意：
-    1. 本函数不会自动删除旧数据库目录。
-    2. 如果需要彻底重建，请由用户自行备份并清理旧的 `Agent/knowledge_base/db`。
     """
     print("开始构建向量知识库...")
     documents = _load_documents()

@@ -48,22 +48,35 @@ class RagAnswer(BaseModel):
     )
 
 
-llm = ChatOpenAI(
-    api_key=settings.API_KEY,
-    base_url=settings.BASE_URL,
-    model_name=settings.MODEL,
-)
+@lru_cache(maxsize=1)
+def _get_llm() -> ChatOpenAI:
+    return ChatOpenAI(
+        api_key=settings.API_KEY,
+        base_url=settings.BASE_URL,
+        model_name=settings.MODEL,
+    )
 
-embedding_function = HuggingFaceEmbeddings(
-    model_name=MODEL_PATH,
-    model_kwargs={"device": "cpu"},
-    encode_kwargs={"normalize_embeddings": True},
-)
 
-db = Chroma(
-    persist_directory=PERSIST_DIRECTORY,
-    embedding_function=embedding_function,
-)
+@lru_cache(maxsize=1)
+def _get_embedding_function() -> HuggingFaceEmbeddings:
+    return HuggingFaceEmbeddings(
+        model_name=MODEL_PATH,
+        model_kwargs={"device": "cpu"},
+        encode_kwargs={"normalize_embeddings": True},
+    )
+
+
+@lru_cache(maxsize=1)
+def _get_vector_db() -> Chroma:
+    if not os.path.exists(PERSIST_DIRECTORY):
+        raise FileNotFoundError(
+            f"知识库持久化目录不存在: {PERSIST_DIRECTORY}。请先运行 Agent/knowledge_base/build_knowledge.py 构建知识库。"
+        )
+
+    return Chroma(
+        persist_directory=PERSIST_DIRECTORY,
+        embedding_function=_get_embedding_function(),
+    )
 
 
 def _slugify(value: str) -> str:
@@ -149,10 +162,14 @@ def _tokenize_text(text: str) -> List[str]:
             tokens.extend(part for part in segment.split("_") if part)
     return tokens[:512]
 
+### 注意这里用了iru
+# 第一次 sparse 检索时，会把当前向量库内容读出来并构造成 BM25 语料缓存
+# 之后都会复用这份缓存
+# 如果重建了知识库，这个 sparse 语料缓存不会自动刷新
 
 @lru_cache(maxsize=1)
 def _get_sparse_corpus() -> Dict[str, Any]:
-    raw = db.get(include=["documents", "metadatas"])
+    raw = _get_vector_db().get(include=["documents", "metadatas"])
     documents = raw.get("documents", [])
     metadatas = raw.get("metadatas", [])
     ids = raw.get("ids", [])
@@ -238,7 +255,7 @@ def _normalize_scores(candidates: List[Dict[str, Any]], score_key: str, normaliz
 
 
 def _dense_retrieve(question: str, fetch_k: int = DENSE_FETCH_K) -> List[Dict[str, Any]]:
-    dense_results = db.similarity_search_with_relevance_scores(question, k=fetch_k)
+    dense_results = _get_vector_db().similarity_search_with_relevance_scores(question, k=fetch_k)
     candidates: List[Dict[str, Any]] = []
 
     for index, (doc, score) in enumerate(dense_results):
@@ -268,6 +285,7 @@ def _select_mmr_candidates(
     if len(candidates) <= top_k:
         return candidates
 
+    embedding_function = _get_embedding_function()
     query_embedding = np.array(embedding_function.embed_query(question), dtype=np.float32)
     doc_embeddings = np.array(
         embedding_function.embed_documents([candidate["page_content"] for candidate in candidates]),
@@ -480,7 +498,7 @@ def _answer_question(question_payload: Dict[str, Any], evidence_payloads: List[D
 
     evidence_blocks = _format_evidence_blocks(evidence_payloads)
     try:
-        runnable = _build_answer_prompt() | llm.with_structured_output(RagAnswer)
+        runnable = _build_answer_prompt() | _get_llm().with_structured_output(RagAnswer)
         answer = runnable.invoke(
             {
                 "question": question_text,

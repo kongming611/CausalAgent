@@ -3,7 +3,7 @@ app.agent.core - agent核心模块
 
 - 初始化llm
 - 初始化mcp
-- 初始化rag
+- 启动期检查rag
 - 初始化agent
 """
 import asyncio, threading, logging, sys, os, json, time
@@ -12,15 +12,10 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from config.settings import settings
 from langchain_openai import ChatOpenAI
-from langchain_chroma import Chroma
-from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.messages import HumanMessage, AIMessage
 from langchain_core.tools import BaseTool
 from typing import Any, Type, List
-from pydantic import BaseModel, create_model, Field
-from langchain.schema.runnable import RunnablePassthrough
-from langchain.schema.output_parser import StrOutputParser
-from langchain_huggingface import HuggingFaceEmbeddings
+from pydantic import BaseModel, create_model
 from langgraph.types import Command 
 from Agent.causal_agent.state import CausalChatState
 from Agent.Report.Metadata_sum import replace_placeholders
@@ -36,7 +31,6 @@ mcp_session: ClientSession | None = None
 mcp_tools: list = []
 mcp_process_stack = AsyncExitStack()
 background_loop: asyncio.AbstractEventLoop | None = None
-rag_chain = None
 llm = None
 agent_graph = None
 NODE_DESCRIPTIONS = {
@@ -130,60 +124,22 @@ def start_event_loop(loop: asyncio.AbstractEventLoop, ready_event: threading.Eve
     logging.info("后台事件循环已启动，MCP 初始化任务已安排。")
     loop.run_forever()
 
-# 初始化rag链
 def initialize_rag_system():
-    """在应用启动时加载向量数据库并构建RAG链。"""
-    global rag_chain, llm
-    logging.info("正在初始化 RAG 知识库系统...")
-    try:
-        model_path = os.path.join(knowledge_base_dir, "models", "bge-small-zh-v1.5")
-        persist_directory = os.path.join(knowledge_base_dir, "db")
-
-        if not os.path.exists(persist_directory):
-            error_msg = f"知识库持久化目录不存在: {persist_directory}。请先运行 'python knowledge_base/build_knowledge.py' 来构建知识库。"
-            logging.error(error_msg)
-            raise FileNotFoundError(error_msg)
-
-        #  初始化组件 
-        logging.info("正在加载 RAG 的 Embedding 模型...")
-        model_kwargs = {'device': 'cpu'}
-        encode_kwargs = {'normalize_embeddings': True}
-        embedding_function = HuggingFaceEmbeddings(
-            model_name=model_path,
-            model_kwargs=model_kwargs,
-            encode_kwargs=encode_kwargs
+    """
+    启动期仅做知识库可用性检查。
+    并在首次查询时延迟初始化 LLM、Embedding 和 Chroma。
+    """
+    logging.info("正在检查 RAG 知识库目录...")
+    persist_directory = os.path.join(knowledge_base_dir, "db")
+    if not os.path.exists(persist_directory):
+        logging.warning(
+            "知识库持久化目录不存在。请先运行 Agent/knowledge_base/build_knowledge.py 构建知识库。",
+            persist_directory,
         )
-
-        logging.info("正在加载向量数据库...")
-        db = Chroma(
-            persist_directory=persist_directory,
-            embedding_function=embedding_function
-        )
-        retriever = db.as_retriever(search_kwargs={"k": 3})
-
-        #  构建RAG链 
-        template = (
-            "请只根据以下提供的上下文信息来回答问题。\n"
-            "如果根据上下文信息无法回答问题，请直接说\"根据提供的知识库，我无法回答该问题\"，不要自行编造答案。\n\n"
-            "上下文:\n{context}\n\n"
-            "问题:\n{question}"
-        )
-        prompt = ChatPromptTemplate.from_template(template)
-
-        # RAG链将问题传递给检索器获取上下文，然后与问题一起传递给提示模板，再由LLM处理，最后输出字符串
-        rag_chain = (
-            {"context": retriever, "question": RunnablePassthrough()}
-            | prompt
-            | llm
-            | StrOutputParser()
-        )
-        logging.info("RAG 知识库系统初始化成功。")
-        return True
-
-    except Exception as e:
-        logging.error(f"初始化 RAG 系统时发生严重错误: {e}", exc_info=True)
-        rag_chain = None
         return False
+
+    logging.info("RAG 启动检查通过；向量库将在首次实际查询时由 query_rag.py 延迟初始化。")
+    return True
 
 #  LangChain Agent 的 MCP 工具封装 
 # 这里是对mcp格式的langchain翻译，翻译成一个类
@@ -247,42 +203,6 @@ class McpTool(BaseTool):
         logging.debug(f"工具 '{self.name}' 返回了原始数据 (前200字符): {function_response_text[:200]}...")
         
         return function_response_text
-
-# 知识库封装     
-class KnowledgeBaseToolInput(BaseModel):
-    """知识库查询工具的输入模型。"""
-    # Field(description=...) 的作用是给这个字段附加一个描述。
-    query: str = Field(description="需要从知识库中查询的具体问题或关键词。")
-
-class KnowledgeBaseTool(BaseTool):
-    """
-    一个用于查询本地知识库以获取因果推断相关知识的工具。
-    """
-    name: str = "knowledge_base_query"
-    description: str = (
-        "用于回答关于因果推断、统计学和机器学习的通用知识性问题。"
-        "当你需要查找一个概念的定义、解释一个术语或获取背景知识时，必须使用此工具。"
-        "例如，当分析结果中出现 '混杂变量' 时，你可以用它来查询 '混杂变量是什么'。"
-    )
-    args_schema: Type[BaseModel] = KnowledgeBaseToolInput
-
-    def _run(self, *args: Any, **kwargs: Any) -> Any:
-        raise NotImplementedError("KnowledgeBaseTool 不支持同步执行。")
-
-    async def _arun(self, query: str) -> Any:
-        """通过 RAG 链异步执行知识库查询。"""
-        global rag_chain
-        if not rag_chain:
-            return "知识库系统当前不可用。"
-            
-        logging.info(f"知识库工具正在查询: '{query}'")
-        try:
-            response = await rag_chain.ainvoke(query)
-            logging.debug(f"知识库工具返回了原始数据 (前200字符): {response[:200]}...")
-            return response
-        except Exception as e:
-            logging.error(f"知识库查询时发生错误: {e}", exc_info=True)
-            return f"查询知识库时出错: {e}"
 
 
 async def ai_call_stream(text, user_id, username, session_id):
