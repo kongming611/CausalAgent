@@ -98,6 +98,7 @@ def save_chat(user_id, session_id, user_msg, ai_response):
                 if ai_content is None:
                     # 如果 summary 为空，将整个响应序列化为字符串作为备用
                     ai_content = json.dumps(ai_response, ensure_ascii=False)
+                    logging.warning(f"AI响应中 summary 为空，已将整个响应序列化为字符串作为备用。")
                 
                 if ai_response.get('type') == 'causal_graph' and 'data' in ai_response:
                     attachment_type = 'causal_graph'

@@ -1,6 +1,8 @@
-from typing import TypedDict, List, Optional, Any, Annotated
-from langchain_core.messages import BaseMessage
 from operator import add
+from typing import Annotated, Any, Dict, List, Optional, TypedDict
+
+from langchain_core.messages import BaseMessage
+
 
 class CausalChatState(TypedDict):
     """
@@ -12,52 +14,37 @@ class CausalChatState(TypedDict):
         user_id: The ID of the current user.
         username: The name of the current user.
         session_id: The ID of the current chat session.
-        
-        # 是否调用工具
-        tool_call_request: Optional[dict]
-
-        # 数据摘要
-        analysis_parameters: Optional[dict]
-        # 数据源文件 (字符串格式，用于工具调用)
-        file_content: Optional[str] 
-        # 解析后的数据框 (Pandas DataFrame，用于内部处理)
-        dataframe: Optional[Any]
-
-        # Fields for storing results from tools
-        causal_analysis_result: Optional[dict]
-        knowledge_base_result: Optional[str]
-        
-        # 后处理补充结果
-        postprocess_result: Optional[dict]
-
-        # Fields for final output and flow control
-        final_report: Optional[str]
+        tool_call_request: Whether downstream nodes should continue the tool flow.
+        analysis_parameters: 数据摘要及分析参数。
+        file_content: 数据源文件内容字符串。
+        causal_analysis_result: 因果分析任务结果。
+        knowledge_base_result: 结构化RAG结果，包含问题、证据链和汇总摘要。
+        preprocess_summary: 预处理阶段的自然语言总结。
+        postprocess_result: 后处理补充结果。
+        final_report: 最终报告内容。
+        visualization_mapping: 图表占位符映射。
+        visualizations: 可视化原始结果。
     """
+
     messages: Annotated[List[BaseMessage], add]
-    
+
     username: str
     user_id: int
     session_id: str
-    fold_name:str
+    fold_name: str
 
     tool_call_request: Optional[bool]
-    
-    ## 从Pandas DataFrame中提取一个结构化的摘要，包含因果推断所需的详细统计信息。
+
     analysis_parameters: Optional[dict]
     file_content: Optional[str]
-    ## dataframe: Optional[Any]
-    
+
     causal_analysis_result: Optional[dict]
-    knowledge_base_result: Optional[str]
-    
+    knowledge_base_result: Optional[Dict[str, Any]]
+
     preprocess_summary: Optional[str]
     postprocess_result: Optional[dict]
 
-    # 报告
     final_report: Optional[str]
     visualization_mapping: Optional[dict]
-    
 
-    
-    # 可视化结果
     visualizations: Optional[dict]

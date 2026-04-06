@@ -2,7 +2,7 @@
 
 
 <p align="center">
-<img src="./readme_img/CausalAgent.png" alt="Logo">
+<img src="./readme_img/causalAgent.png" alt="Logo">
 </p>
 
 <h1 align="center">
@@ -32,7 +32,7 @@ CausalAgent
 
   <p>
 
-*只需上传你的数据集，CausalAgent 就能以对话的方式，自动帮你选用因果分析算法，并在生成可交互的对话面板和专业的分析报告。*
+*只需上传你的数据集，Causal-Agent 就能以对话的方式，自动帮你选用因果分析算法，并在生成可交互的对话面板和专业的分析报告。*
 
 > [!IMPORTANT]
 > **项目开发中**
@@ -68,6 +68,7 @@ CausalAgent
 ## WHAT IS CausalAgent
 
 **新一代因果分析智能体**: CausalAgent 是一个集成了AGENT的因果分析工具，它能够自动识别因果关系，生成专业的分析报告，并提供可交互的因果图谱。
+
 **缩减因果分析门槛**：什么是因果？为什么需要因果分析？简单来说，[因果分析](https://zh.wikipedia.org/wiki/%E5%9B%A0%E6%9E%9C%E6%8E%A8%E6%96%B7)就是对真实世界数据进行逻辑分析。
 
 ## WHY CausalAgent
@@ -588,3 +589,21 @@ python Run_causal.py
 2025.11.26
   - 【内容新增】：完善MCP机制，支持动态选择不同算法
   - 【内容新增】：新增olc算法支持
+
+---
+2025.12.18
+- 【重构】：更名为CausalAgent
+
+---
+2026.3.20
+- 【内容重构和新增】：
+  - 重构了查询主链路， dense 检索 -> MMR -> sparse 检索 -> 候选融合重排 -> 证据块构造 -> 结构化回答 -> 证据链输出。
+  - 重构了知识库构建脚本，在 build_knowledge.py 中补齐了文档级和 chunk 级 metadata，包括 doc_id、chunk_id、doc_type、corpus、page 等，为后续检索过滤、证据链保存和评测提供基础。
+  - 重构了问题生成模块，在 rag_questions.py 中把 RAG 问题从字符串列表升级为结构化对象，新增 intent、priority、why_needed，让知识库查询更贴近报告增强目标。
+  - 重构了任务与状态传递，在 rag_query_task.py 和 state.py 中把 knowledge_base_result 从字符串改为结构化结果，保证 LangGraph 流程中可以传递完整证据链。
+  - 适配了下游消费逻辑，在 nodes.py、fix_cycles.py、evaluate_edge_llm.py 中增加了摘要转换逻辑，使报告生成、环路修正和边评估都能消费结构化 RAG 结果，而不是依赖旧的字符串结果。
+  - 增加了混合检索能力：dense 检索负责语义召回，sparse 检索负责关键词召回。
+  - 增加了 MMR 去重能力，减少相似 chunk 重复进入最终证据集合。
+  - 增加了轻量级融合重排逻辑，综合 dense 分数、sparse 分数、语料类型和双路命中情况得到最终 rerank_score。
+  - 新增了评测脚本 rag_eval.py，当前支持检索层指标 Recall@k、Precision@k、MRR、Hit Rate，以及轻量级生成层关键点覆盖评测。
+  - 新增了 metadata 导出脚本 export_metadata.py，
