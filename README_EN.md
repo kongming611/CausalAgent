@@ -180,7 +180,7 @@ Here is a brief guide. For more detailed, Chinese step-by-step instructions (inc
 6. Start the backend service:
 
    ```bash
-   python CausalAgent.py
+   python Causalchat.py
    ```
 
 7. In another terminal, start the desktop frontend:

@@ -305,7 +305,7 @@ alembic upgrade head
 在项目根目录下打开一个终端，运行以下命令：
 
 ```bash
-python CausalAgent.py
+python Causalchat.py
 ```
 
 首次运行时，程序会自动连接到你在 `secrets.json` 中配置的数据库，并创建所需的表结构。你会看到 Flask 开发服务器启动的日志，它正在 `http://127.0.0.1:5001` 上监听。**请保持此终端窗口持续运行。**
