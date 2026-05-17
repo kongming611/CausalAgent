@@ -47,11 +47,84 @@ class AppConfig:
         self.BASE_URL = self._get_config("BASE_URL")
         self.MODEL = self._get_config("MODEL")
 
-        # 数据库配置
-        self.MYSQL_HOST = self._get_config("MYSQL_HOST")
-        self.MYSQL_USER = self._get_config("MYSQL_USER")
-        self.MYSQL_PASSWORD = self._get_config("MYSQL_PASSWORD")
+        # 数据库配置。MYSQL_HOST 作为历史兼容项，默认等价于写库地址。
+        self.MYSQL_HOST = self._get_config("MYSQL_HOST", required=False)
+        self.MYSQL_WRITE_HOST = self._get_config(
+            "MYSQL_WRITE_HOST",
+            required=False,
+            default=self.MYSQL_HOST
+        )
+        if not self.MYSQL_WRITE_HOST:
+            raise ValueError("配置错误: 缺少必需的环境变量 'MYSQL_HOST' 或 'MYSQL_WRITE_HOST'。")
+        self.MYSQL_HOST = self.MYSQL_WRITE_HOST
+        self.MYSQL_READ_HOSTS = self._parse_csv_config(
+            self._get_config("MYSQL_READ_HOSTS", required=False, default="")
+        )
+        self.MYSQL_PORT = self._get_int_config("MYSQL_PORT", default=3306)
+        self.MYSQL_USER = self._get_config("MYSQL_USER", required=False, default=None)
+        self.MYSQL_PASSWORD = self._get_config("MYSQL_PASSWORD", required=False, default=None)
+        self.MYSQL_WRITE_USER = self._get_config(
+            "MYSQL_WRITE_USER",
+            required=False,
+            default=self.MYSQL_USER
+        )
+        self.MYSQL_WRITE_PASSWORD = self._get_config(
+            "MYSQL_WRITE_PASSWORD",
+            required=False,
+            default=self.MYSQL_PASSWORD
+        )
+        self.MYSQL_READ_USER = self._get_config(
+            "MYSQL_READ_USER",
+            required=False,
+            default=self.MYSQL_USER
+        )
+        self.MYSQL_READ_PASSWORD = self._get_config(
+            "MYSQL_READ_PASSWORD",
+            required=False,
+            default=self.MYSQL_PASSWORD
+        )
+        self.MYSQL_REPLICA_STATUS_USER = self._get_config(
+            "MYSQL_REPLICA_STATUS_USER",
+            required=False,
+            default=None
+        )
+        self.MYSQL_REPLICA_STATUS_PASSWORD = self._get_config(
+            "MYSQL_REPLICA_STATUS_PASSWORD",
+            required=False,
+            default=None
+        )
+        missing_database_credentials = [
+            name
+            for name, value in {
+                "MYSQL_WRITE_USER 或 MYSQL_USER": self.MYSQL_WRITE_USER,
+                "MYSQL_WRITE_PASSWORD 或 MYSQL_PASSWORD": self.MYSQL_WRITE_PASSWORD,
+                "MYSQL_READ_USER 或 MYSQL_USER": self.MYSQL_READ_USER,
+                "MYSQL_READ_PASSWORD 或 MYSQL_PASSWORD": self.MYSQL_READ_PASSWORD,
+            }.items()
+            if not value
+        ]
+        if missing_database_credentials:
+            raise ValueError(f"配置错误: 缺少数据库账号配置 {missing_database_credentials}")
         self.MYSQL_DATABASE = self._get_config("MYSQL_DATABASE")
+        self.MYSQL_POOL_SIZE_WRITE = self._get_int_config("MYSQL_POOL_SIZE_WRITE", default=5)
+        self.MYSQL_POOL_SIZE_READ = self._get_int_config("MYSQL_POOL_SIZE_READ", default=5)
+        self.MYSQL_REPLICA_MAX_LAG_SECONDS = self._get_int_config(
+            "MYSQL_REPLICA_MAX_LAG_SECONDS",
+            default=2
+        )
+        self.MYSQL_QUERY_WARN_MS = self._get_int_config("MYSQL_QUERY_WARN_MS", default=500)
+        self.MAX_UPLOAD_SIZE_MB = self._get_int_config("MAX_UPLOAD_SIZE_MB", default=20)
+        self.MAX_UPLOAD_SIZE_BYTES = self.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+        self.MYSQL_REPLICATION_USER = self._get_config(
+            "MYSQL_REPLICATION_USER",
+            required=False,
+            default="causalchat_"
+        )
+        self.MYSQL_REPLICATION_PASSWORD = self._get_config(
+            "MYSQL_REPLICATION_PASSWORD",
+            required=False,
+            default=None
+        )
         
         # LangSmith 
         # 可选配置不强制要求，缺失时使用默认值
@@ -102,6 +175,21 @@ class AppConfig:
         
         # 可选项未找到，返回默认值
         return default
+
+    def _get_int_config(self, key, default):
+        value = os.environ.get(key)
+        if value in (None, ""):
+            return default
+        try:
+            return int(value)
+        except ValueError as exc:
+            raise ValueError(f"配置错误: 环境变量 '{key}' 必须是整数，当前值为 '{value}'。") from exc
+
+    @staticmethod
+    def _parse_csv_config(value):
+        if not value:
+            return []
+        return [item.strip() for item in value.split(",") if item.strip()]
         
     def _setup_langsmith(self):
         """
@@ -129,4 +217,4 @@ try:
 except (FileNotFoundError, ValueError) as e:
     logging.critical(f"配置加载失败，应用无法启动: {e}")
 
-    raise 
+    raise
