@@ -118,7 +118,7 @@ class MySQLSaver(BaseCheckpointSaver):
                     "v": 1,                    # 版本号
                     "id": "uuid-222",          # 新checkpoint的ID（LangGraph生成）
                     "ts": "2024-01-15...",     # 时间戳
-                    "channel_values": {        # ← 这是您的 CausalChatState！
+                    "channel_values": {        #  CausalChatState
                         "messages": [...],
                         "analysis_parameters": {...},
                         ...
@@ -435,7 +435,7 @@ class MySQLSaver(BaseCheckpointSaver):
                             }
                         }
                     
-                    # yield 返回（这是一个生成器函数）
+                    # yield 返回
                     yield CheckpointTuple(
                         config={
                             "configurable": {

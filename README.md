@@ -2,7 +2,7 @@
 
 
 <p align="center">
-<img src="./readme_img/causalAgent.png" alt="Logo">
+<img src="./readme_img/CausalAgent.png" alt="Logo">
 </p>
 
 <h1 align="center">
@@ -373,6 +373,7 @@ python Run_causal.py
 │   ├── Report/             # 报告生成逻辑
 │   ├── knowledge_base/     # RAG 知识库
 │   │   ├── build_knowledge.py
+|   |   ├── query_rag.py
 │   │   ├── db/             # 向量知识库存储
 │   │   └── models/         # 嵌入模型
 │   └── tool_node/          # MCP 工具节点封装（task、rag 调用等）
