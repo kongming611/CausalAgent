@@ -26,6 +26,7 @@
 ├── Dockerfile
 ├── docker-compose.yml
 ├── docker-compose.prod.yml
+├── docker-compose.replica.yml # MySQL 主从开发拓扑
 ├── README.md               # 项目说明
 ├── database_init.log       # 数据库初始化日志
 ├── app/                    # Flask 应用主目录（Blueprint 结构）
@@ -53,6 +54,9 @@
 │   └── tool_node/
 ├── Database/               # 数据库初始化与迁移逻辑
 │   ├── database_init.py
+│   ├── audit_before_db_upgrade.py
+│   ├── monitoring.py
+│   ├── mysql/              # MySQL 主从配置与初始化脚本
 │   ├── agent_connect.py
 │   └── migrations/
 ├── config/
@@ -75,7 +79,11 @@
   - `app/static/js/script.js`
 - 数据库初始化脚本位于 `Database/database_init.py`。
 - Alembic 迁移目录由 `alembic.ini` 指向 `Database/migrations`。
-- `Database/database_init.py` 会创建数据库、基础表和索引，并带有“是否创建存储过程”的交互式提问。
+- `Database/database_init.py` 只负责加载环境变量、确保数据库存在并检查连接；业务表结构由 Alembic 迁移维护。
+- 数据库生产化升级前应先执行 `Database/audit_before_db_upgrade.py`，检查孤立消息、孤立附件、非法附件类型和分区状态。
+- `app/db.py` 提供写库连接、业务读连接、复制状态观测连接、慢查询计时和从库延迟回退能力；`get_db_connection()` 仅作为兼容旧代码的主库写入口。
+- 数据库账号按职责拆分：`MYSQL_WRITE_USER`/`MYSQL_WRITE_PASSWORD` 用于写库，`MYSQL_READ_USER`/`MYSQL_READ_PASSWORD` 用于业务读，`MYSQL_REPLICA_STATUS_USER`/`MYSQL_REPLICA_STATUS_PASSWORD` 只用于 `SHOW REPLICA STATUS`。旧变量 `MYSQL_USER`/`MYSQL_PASSWORD` 仅作为写/读账号兼容兜底，复制状态检查不会回退到旧业务账号。其中其中写账号对业务库授予了 `SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES`，以支持 Alembic 在建表时创建外键。
+- `docker-compose.replica.yml` 提供本地 MySQL 主从拓扑：`mysql-primary`、`mysql-replica` 和应用容器。本轮不做自动故障切换。
 - Docker 开发方式为主要目的，注意若更改数据库，env等文件，需要重构docker的环境。挂载以下知识库目录：
   - `Agent/knowledge_base/models`
   - `Agent/knowledge_base/db`
@@ -90,7 +98,7 @@
 conda activate causalchat
 ```
 
-如需显式说明 Python，项目既有环境为：
+如需显式说明 Python，项目既有环境为，若在本地环境找不到某个包，请注意切换python解释器：
 
 ```bash
 ~/.conda/envs/causalchat/python.exe
@@ -108,22 +116,25 @@ python Causalchat.py
 python Run_causal.py
 ```
 
-Docker 开发启动：
+
+Docker 主从开发启动：
 
 ```bash
-docker-compose up -d
+docker-compose -f docker-compose.replica.yml up -d
 ```
 
 数据库初始化与迁移：
 
 ```bash
 python Database/database_init.py
+python Database/audit_before_db_upgrade.py
 alembic upgrade head
 ```
 
 ### 3.2 数据库相关特别要求
 
 数据库结构变更不能只改一处；至少同时检查以下位置：
+注意数据库采用主从开发
 
 ```text
 Database/database_init.py
@@ -131,6 +142,11 @@ Database/migrations/versions/*
 app/db.py
 相关 SQL 读写代码
 ```
+MYSQL_WRITE_USER：应用写主库、迁移、启动检查用。
+MYSQL_READ_USER：应用读主库/从库业务数据用。
+MYSQL_REPLICA_STATUS_USER：只给应用执行 SHOW REPLICA STATUS 用。
+MYSQL_REPLICATION_USER：只给 MySQL 从库拉主库 binlog 用。
+MYSQL_USER/MYSQL_PASSWORD：现在主要是兼容兜底，主从开发里不依赖它。
 
 ## 4. 工具与 skills 使用原则
 
