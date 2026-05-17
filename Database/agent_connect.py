@@ -2,26 +2,13 @@
 node节点中的数据库交互
 '''
 import mysql.connector
-from config.settings import settings
 import logging
+from app.db import get_read_connection
 # 这些函数帮助节点与应用程序的数据库进行交互，以获取文件等资源。
-def get_db_connection():
-    """创建并返回一个MySQL数据库连接。"""
-    try:
-        return mysql.connector.connect(
-            host=settings.MYSQL_HOST,
-            user=settings.MYSQL_USER,
-            password=settings.MYSQL_PASSWORD,
-            database=settings.MYSQL_DATABASE
-        )
-    except mysql.connector.Error as err:
-        logging.error(f"Agent Node: MySQL 连接错误: {err}")
-        raise
-
 def get_file_content(user_id: int, filename: str) -> bytes | None:
     """从数据库为指定用户获取文件内容。"""
     try:
-        with get_db_connection() as conn:
+        with get_read_connection(consistency="strong") as conn:
             cursor = conn.cursor(dictionary=True)
             cursor.execute(
                 "SELECT file_content FROM uploaded_files WHERE user_id = %s AND original_filename = %s ORDER BY last_accessed_at DESC LIMIT 1",
@@ -36,7 +23,7 @@ def get_file_content(user_id: int, filename: str) -> bytes | None:
 def get_recent_file(user_id: int) -> tuple[bytes | None, str | None]:
     """获取用户最近上传或访问的文件的内容和名称。"""
     try:
-        with get_db_connection() as conn:
+        with get_read_connection(consistency="strong") as conn:
             cursor = conn.cursor(dictionary=True)
             cursor.execute(
                 "SELECT file_content, original_filename FROM uploaded_files WHERE user_id = %s ORDER BY last_accessed_at DESC LIMIT 1",

@@ -5,6 +5,7 @@ from flask import Blueprint, request, jsonify, session
 import logging
 import asyncio
 from app.agent import core as agent_core
+from app.auth.session_guard import get_current_session_user
 from app.chat.services import save_chat
 from app.agent.core import ai_call_stream
 import json
@@ -19,11 +20,12 @@ def handle_message_stream():
     from flask import session, stream_with_context, Response
     
     # 认证检查
-    if 'user_id' not in session or 'username' not in session:
+    current_user = get_current_session_user()
+    if not current_user:
         return jsonify({'success': False, 'error': '用户未登录或会话已过期'}), 401
     
-    user_id = session['user_id']
-    username = session['username']
+    user_id = current_user['id']
+    username = current_user['username']
     
     # 获取请求参数
     data = request.json

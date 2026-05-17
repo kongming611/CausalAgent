@@ -17,6 +17,7 @@ from contextlib import contextmanager
 import json
 import logging
 import asyncio
+from app.db import get_read_connection, get_write_connection
 
 # 配置日志
 logger = logging.getLogger(__name__)
@@ -65,7 +66,7 @@ class MySQLSaver(BaseCheckpointSaver):
         # 调用父类构造函数，初始化序列化器
         super().__init__(serde=serde or JsonPlusSerializer(pickle_fallback=True))
         
-        # 保存数据库配置
+        # 保存数据库配置。保留参数用于兼容旧调用，实际连接统一由 app.db 管理。
         self.connection_config = connection_config
         
         logger.info("MySQLSaver 初始化完成")
@@ -79,8 +80,7 @@ class MySQLSaver(BaseCheckpointSaver):
         """
         conn = None
         try:
-            # 建立连接
-            conn = mysql.connector.connect(**self.connection_config)
+            conn = get_write_connection()
             yield conn
         except mysql.connector.Error as e:
             logger.error(f"数据库连接失败: {e}")
@@ -167,7 +167,7 @@ class MySQLSaver(BaseCheckpointSaver):
             raise
         
         # 保存到数据库
-        with self._get_connection() as conn:
+        with get_write_connection() as conn:
             cursor = conn.cursor()
             
             # MySQL 语法：INSERT ... ON DUPLICATE KEY UPDATE
@@ -248,7 +248,7 @@ class MySQLSaver(BaseCheckpointSaver):
         
         logger.info(f"查询 checkpoint: thread_id={thread_id}, checkpoint_id={checkpoint_id}")
         
-        with self._get_connection() as conn:
+        with get_read_connection(consistency="strong") as conn:
             cursor = conn.cursor(dictionary=True)
             
             # 有 checkpoint_id，获取指定的 
@@ -391,7 +391,7 @@ class MySQLSaver(BaseCheckpointSaver):
         
         logger.info(f"列出 thread {thread_id} 的 checkpoint 历史")
         
-        with self._get_connection() as conn:
+        with get_read_connection(consistency="strong") as conn:
             cursor = conn.cursor(dictionary=True)
             
             # 构建 SQL 查询
@@ -495,7 +495,7 @@ class MySQLSaver(BaseCheckpointSaver):
             f"thread_id={thread_id}, checkpoint_id={checkpoint_id}, task_id={task_id}"
         )
         
-        with self._get_connection() as conn:
+        with get_write_connection() as conn:
             cursor = conn.cursor()
             
             # 遍历所有写操作
@@ -638,7 +638,7 @@ class MySQLSaver(BaseCheckpointSaver):
         """
         logger.info(f"删除 thread: {thread_id}")
         
-        with self._get_connection() as conn:
+        with get_write_connection() as conn:
             cursor = conn.cursor()
             
             # MySQL 会自动级联删除（如果设置了外键）
@@ -666,7 +666,7 @@ class MySQLSaver(BaseCheckpointSaver):
         Returns:
             checkpoint 数量
         """
-        with self._get_connection() as conn:
+        with get_read_connection(consistency="strong") as conn:
             cursor = conn.cursor()
             cursor.execute("""
                 SELECT COUNT(*) as count
