@@ -76,7 +76,7 @@
 - 数据库初始化脚本位于 `Database/database_init.py`。
 - Alembic 迁移目录由 `alembic.ini` 指向 `Database/migrations`。
 - `Database/database_init.py` 会创建数据库、基础表和索引，并带有“是否创建存储过程”的交互式提问。
-- Docker 开发方式真实存在，并挂载以下知识库目录：
+- Docker 开发方式为主要目的，注意若更改数据库，env等文件，需要重构docker的环境。挂载以下知识库目录：
   - `Agent/knowledge_base/models`
   - `Agent/knowledge_base/db`
 - RAG 启动时只做目录可用性检查；知识库目录不存在时允许后端以“无知识库模式”继续运行。
