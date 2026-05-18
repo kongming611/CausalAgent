@@ -25,5 +25,5 @@ COPY . .
 
 EXPOSE 5001
 
-CMD ["python", "Causalchat.py"]
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:5001 --workers ${WEB_WORKERS:-1} --threads ${WEB_THREADS:-12} --timeout ${WEB_TIMEOUT:-120} Causalchat:app"]
 
