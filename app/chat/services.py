@@ -164,8 +164,11 @@ def save_chat(user_id, session_id, user_msg, ai_response):
                 cursor.execute(sql_update_session, (timestamp_dt, session_id, user_id))
             
             conn.commit()
+            return True
     except mysql.connector.Error as e:
         logging.error(f"保存聊天记录到数据库时出错 (用户 ID: {user_id}, 会话: {session_id}): {e}")
+        return False
     except Exception as e:
         logging.error(f"保存聊天时发生未知错误: {e}")
+        return False
 
