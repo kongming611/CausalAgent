@@ -231,6 +231,16 @@ MYSQL_POOL_SIZE_WRITE=5
 MYSQL_POOL_SIZE_READ=5
 MYSQL_REPLICA_MAX_LAG_SECONDS=2
 MYSQL_QUERY_WARN_MS=500
+
+# Web/后台任务并发配置
+WEB_WORKERS=1
+WEB_THREADS=12
+WEB_TIMEOUT=120
+JOB_WORKERS=2
+JOB_HEARTBEAT_INTERVAL_SECONDS=10
+JOB_STALE_AFTER_SECONDS=120
+JOB_MAX_ATTEMPTS=3
+
 MAX_UPLOAD_SIZE_MB=20
 
 
@@ -248,14 +258,14 @@ docker-compose -f docker-compose.replica.yml up -d
 
 4. 运行数据库迁移
 ```bash
-python Database/database_init.py
-alembic upgrade head
+docker-compose -f docker-compose.replica.yml run --rm app python Database/database_init.py
+docker-compose -f docker-compose.replica.yml run --rm app alembic upgrade head
 ```
 
 如果是已有旧数据、准备做生产化升级，再额外先执行：
 
 ```bash
-python Database/audit_before_db_upgrade.py
+docker-compose -f docker-compose.replica.yml run --rm app python Database/audit_before_db_upgrade.py
 ```
 
 > [!IMPORTANT]
@@ -278,6 +288,7 @@ python Database/audit_before_db_upgrade.py
 
 - `GET /api/admin/db/health`
 - `GET /api/admin/db/slow-queries`
+- `GET /api/admin/jobs/workers`
 
 
 
@@ -376,13 +387,19 @@ alembic upgrade head
 
 9. 启动后端服务
 
-在项目根目录下打开一个终端，运行以下命令：
+在项目根目录下打开一个终端，运行 Web 层：
 
 ```bash
 python Causalchat.py
 ```
 
-首次运行时，程序会自动连接到你在 `.env` 中配置的数据库，并创建所需的表结构。你会看到 Flask 开发服务器启动的日志，它正在 `http://127.0.0.1:5001` 上监听。**请保持此终端窗口持续运行。**
+再打开一个终端，运行后台 worker：
+
+```bash
+python -m app.agent.worker
+```
+
+首次运行时，Web 层会检查数据库表结构。Agent/MCP 初始化只在 worker 中执行；如果没有 worker，前端可以创建任务但不会得到最终分析结果。请保持 Web 和 worker 两个终端窗口持续运行。
 
 10. 启动前端应用
 
@@ -408,7 +425,7 @@ python Run_causal.py
 3. 提交代码
 
 4. 新建 Pull Request
-   
+
 ## Star 趋势
 
 [![Star History Chart](https://api.star-history.com/svg?repos=Heyflyingpig/CausalAgent&type=Date)](https://star-history.com/#Heyflyingpig/CausalAgent&Date)
@@ -698,15 +715,25 @@ python Run_causal.py
   - 新增数据库审计脚本、轻量监控接口和一组覆盖配置解析、连接边界、迁移链、主从初始化、失效会话保护的测试。
   - 修复旧实现中多个容易在生产化阶段暴露的问题，包括：应用误用业务账号执行 `SHOW REPLICA STATUS`、数据库初始化职责和 Alembic 迁移职责重叠、旧 session 在用户数据失效后仍可能继续访问接口、上传文件缺少体积上限等。
 - 【修复问题】
-  - 修复数据库初始化与迁移职责重叠的问题  
+  - 修复数据库初始化与迁移职责重叠的问题
    旧版 `Database/database_init.py` 同时负责建库、建表、建索引和部分结构逻辑，容易与 Alembic 演进冲突。现在它只负责确保数据库存在和连接可用，结构统一由迁移脚本维护。
-  - 修复主从读写边界不清的问题  
+  - 修复主从读写边界不清的问题
    旧代码主要通过单一路径访问 MySQL，主从环境下很难明确“哪些查询必须强一致、哪些查询允许弱一致”。本轮将强一致读、弱一致读和写入路径拆开，并在弱一致读失败时自动回退主库。
-  - 修复复制状态检查权限模型不干净的问题  
+  - 修复复制状态检查权限模型不干净的问题
    旧设计容易让应用继续用业务账号执行 `SHOW REPLICA STATUS`。现在新增专用状态账号；未配置该账号时，系统会安全回退主库，而不是继续误用高权限账号。
-  - 修复旧 session 残留导致的伪登录状态问题  
+  - 修复旧 session 残留导致的伪登录状态问题
    当浏览器 session 还在、但数据库中的用户已失效时，原逻辑可能继续把请求当作已登录。现在引入 `app/auth/session_guard.py`，会在鉴权时校验真实用户，不存在则清空 session。
-  - 修复上传文件缺少大小上限的问题  
+  - 修复上传文件缺少大小上限的问题
    文件上传现在新增 `MAX_UPLOAD_SIZE_MB` / `MAX_UPLOAD_SIZE_BYTES` 限制，避免过大文件直接写入 `uploaded_files.file_content`。
-  - 修复迁移链起点不完整的问题  
+  - 修复迁移链起点不完整的问题
    新增 `1a2b3c4d5e6f_create_core_schema.py` 作为核心 schema 基线，并让 checkpoint 迁移依赖它，避免空库初始化只能依赖历史手工建表。
+
+---
+2026.5.18
+**重要更新**
+- 【内容新增与重构】：
+  - 任务创建、任务领取、事件写入和 SSE 推送已经拆分到不同层，Web 不再直接承担长任务执行。
+  - 新增 `analysis_jobs` 与 `analysis_job_events` 数据库作为任务队列和事件流的持久化数据库。
+  - 后台 worker 以 slot 为单位持有独立 MCP session 和 Agent graph，避免 Web 进程阻塞。
+  - 同一 `user_id + session_id` 的并发任务通过唯一约束兜底，防止重复执行。
+  - 旧接口 `POST /api/send_stream` 已转为迁移提示，前端改走 `POST /api/agent/jobs` 与 SSE 订阅。
