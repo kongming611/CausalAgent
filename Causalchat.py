@@ -1,4 +1,5 @@
 # app.py (Flask后端)
+# Agent/MCP 长任务请通过 worker 进程运行。
 from flask import Flask, jsonify, request, send_from_directory
 import os
 import logging
