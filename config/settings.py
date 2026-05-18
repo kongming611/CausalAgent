@@ -113,6 +113,19 @@ class AppConfig:
             default=2
         )
         self.MYSQL_QUERY_WARN_MS = self._get_int_config("MYSQL_QUERY_WARN_MS", default=500)
+        self.JOB_WORKERS = self._get_int_config("JOB_WORKERS", default=2)
+        self.JOB_POLL_INTERVAL_SECONDS = self._get_float_config("JOB_POLL_INTERVAL_SECONDS", default=1.0)
+        self.JOB_HEARTBEAT_INTERVAL_SECONDS = self._get_int_config(
+            "JOB_HEARTBEAT_INTERVAL_SECONDS",
+            default=10,
+        )
+        self.JOB_STALE_AFTER_SECONDS = self._get_int_config("JOB_STALE_AFTER_SECONDS", default=120)
+        self.JOB_MAX_ATTEMPTS = self._get_int_config("JOB_MAX_ATTEMPTS", default=3)
+        self.SSE_POLL_INTERVAL_SECONDS = self._get_float_config("SSE_POLL_INTERVAL_SECONDS", default=1.0)
+        self.SSE_HEARTBEAT_INTERVAL_SECONDS = self._get_int_config(
+            "SSE_HEARTBEAT_INTERVAL_SECONDS",
+            default=15,
+        )
         self.MAX_UPLOAD_SIZE_MB = self._get_int_config("MAX_UPLOAD_SIZE_MB", default=20)
         self.MAX_UPLOAD_SIZE_BYTES = self.MAX_UPLOAD_SIZE_MB * 1024 * 1024
         self.MYSQL_REPLICATION_USER = self._get_config(
@@ -184,6 +197,15 @@ class AppConfig:
             return int(value)
         except ValueError as exc:
             raise ValueError(f"配置错误: 环境变量 '{key}' 必须是整数，当前值为 '{value}'。") from exc
+
+    def _get_float_config(self, key, default):
+        value = os.environ.get(key)
+        if value in (None, ""):
+            return default
+        try:
+            return float(value)
+        except ValueError as exc:
+            raise ValueError(f"配置错误: 环境变量 '{key}' 必须是数字，当前值为 '{value}'。") from exc
 
     @staticmethod
     def _parse_csv_config(value):
