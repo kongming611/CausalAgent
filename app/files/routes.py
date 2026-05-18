@@ -3,7 +3,9 @@ app.files.routes - 文件路由
 '''
 from flask import Blueprint, request, jsonify, session
 import logging
-from app.db import get_db_connection
+from app.db import get_read_connection, get_write_connection
+from app.auth.session_guard import get_current_session_user
+from config.settings import settings
 import mysql.connector
 import os
 import hashlib
@@ -14,13 +16,14 @@ files_bp = Blueprint('files', __name__, url_prefix='/api')
 # 获取文件列表
 @files_bp.route('/files')
 def get_file_list():
-    if 'user_id' not in session:
+    current_user = get_current_session_user()
+    if not current_user:
         return jsonify({"error": "用户未登录或会话已过期"}), 401
     
-    user_id = session['user_id']
+    user_id = current_user['id']
     logging.info(f"用户 {user_id} 请求文件列表")
     try:
-        with get_db_connection() as conn:
+        with get_read_connection(consistency="eventual") as conn:
             cursor = conn.cursor(dictionary=True)
             cursor.execute("SELECT id, filename, last_accessed_at FROM uploaded_files WHERE user_id = %s ORDER BY last_accessed_at DESC", (user_id,))
             file_rows = cursor.fetchall()
@@ -49,11 +52,12 @@ def get_file_list():
 @files_bp.route('/upload_file', methods=['POST'])
 def upload_file():
     #  重构：从 Session 获取用户身份 
-    if 'user_id' not in session:
+    current_user = get_current_session_user()
+    if not current_user:
         return jsonify({'success': False, 'error': '用户未登录或会话已过期'}), 401
     
-    user_id = session['user_id']
-    username = session.get('username', '未知用户') # 用于日志
+    user_id = current_user['id']
+    username = current_user['username'] # 用于日志
     
     session_id = request.form.get('session_id')
     if not session_id:
@@ -89,13 +93,24 @@ def upload_file():
         file_content = file.read() # 将整个文件内容读取为 bytes
         file_hash = hashlib.sha256(file_content).hexdigest()
         file_size = len(file_content)
+        if file_size > settings.MAX_UPLOAD_SIZE_BYTES:
+            logging.warning(
+                "用户 %s 上传文件超过大小限制: %s bytes > %s bytes",
+                username,
+                file_size,
+                settings.MAX_UPLOAD_SIZE_BYTES,
+            )
+            return jsonify({
+                'success': False,
+                'error': f'文件大小不能超过 {settings.MAX_UPLOAD_SIZE_MB}MB'
+            }), 413
     except Exception as e:
         logging.error(f"用户 {username} 上传文件 {original_filename} 时读取内容或计算哈希失败: {e}")
         return jsonify({'success': False, 'error': '处理文件内容失败'}), 500
     
     # 6. 检查重复文件并保存到数据库 (使用哈希)
     try:
-        with get_db_connection() as conn:
+        with get_write_connection() as conn:
             cursor = conn.cursor(dictionary=True) # 使用字典游标
             
             # 检查是否已存在相同哈希的文件
@@ -146,10 +161,11 @@ def upload_file():
 # delete file
 @files_bp.route('/delete_file', methods=['POST'])
 def delete_file():
-    if 'user_id' not in session:
+    current_user = get_current_session_user()
+    if not current_user:
         return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
     
-    user_id = session['user_id']
+    user_id = current_user['id']
     data = request.json
     file_id = data.get('file_id')
 
@@ -157,7 +173,7 @@ def delete_file():
         return jsonify({"success": False, "error": "缺少文件ID"}), 400
 
     try:
-        with get_db_connection() as conn:
+        with get_write_connection() as conn:
             cursor = conn.cursor()
             
             # 执行删除，确保文件属于用户

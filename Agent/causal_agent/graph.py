@@ -94,8 +94,8 @@ def create_graph(llm: "ChatOpenAI", mcp_session: "ClientSession"):
         from config.settings import settings
         
         connection_config = {
-            'host': settings.MYSQL_HOST,
-            'port': 3306,  # MySQL 默认端口
+            'host': settings.MYSQL_WRITE_HOST,
+            'port': settings.MYSQL_PORT,
             'user': settings.MYSQL_USER,
             'password': settings.MYSQL_PASSWORD,
             'database': settings.MYSQL_DATABASE
