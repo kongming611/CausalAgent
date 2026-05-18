@@ -229,6 +229,8 @@ def check_database_readiness():
                 "archived_sessions",
                 "checkpoints",
                 "checkpoint_writes",
+                "analysis_jobs",
+                "analysis_job_events",
             ]
             cursor.execute(
                 """

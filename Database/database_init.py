@@ -122,8 +122,7 @@ def main() -> int:
 
     print("\n数据库已存在且连接可用。")
     print("下一步请执行：")
-    print("  (旧表迁移)python Database/audit_before_db_upgrade.py")
-    print("  alembic upgrade head")
+    print("  docker-compose -f docker-compose.replica.yml run --rm app alembic upgrade head")
     print("\n说明：业务表结构由 Alembic 迁移维护，本脚本不再创建或修改业务表。")
     return 0
 

@@ -276,6 +276,19 @@ def delete_session():
                     logging.warning(f"发现用户 {user_id} 的会话 {session_id} 有孤立消息，正在清理")
             # 
 
+            cursor.execute("""
+                SELECT 1
+                FROM analysis_jobs
+                WHERE session_id = %s
+                  AND user_id = %s
+                  AND status IN ('queued', 'running')
+                LIMIT 1
+            """, (session_id, user_id))
+            if cursor.fetchone():
+                conn.rollback()
+                logging.info(f"用户 {user_id} 尝试删除仍有 active job 的会话 {session_id}")
+                return jsonify({"success": False, "error": "当前会话仍有任务正在运行，请等待完成后再删除"}), 409
+
             # 1. 删除与该会话相关的附件 (通过连接 chat_messages)
             # 这是为了处理 chat_attachments 和 chat_messages 之间没有直接外键的情况
             sql_delete_attachments = """
