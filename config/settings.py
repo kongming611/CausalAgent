@@ -118,7 +118,7 @@ class AppConfig:
         self.MYSQL_REPLICATION_USER = self._get_config(
             "MYSQL_REPLICATION_USER",
             required=False,
-            default="causalchat_"
+            default="replica"
         )
         self.MYSQL_REPLICATION_PASSWORD = self._get_config(
             "MYSQL_REPLICATION_PASSWORD",
@@ -132,7 +132,7 @@ class AppConfig:
         self.LANGCHAIN_PROJECT = self._get_config(
             "LANGCHAIN_PROJECT", 
             required=False, 
-            default="CausalChat-Default-Project"
+            default="CausalAgent-Default-Project"
         )
 
         # 初始化完成后，自动设置 LangSmith
