@@ -6,6 +6,7 @@ from flask import Blueprint, jsonify, session
 import logging
 
 from Database.monitoring import get_db_health, get_slow_query_summary
+from app.agent.job_service import get_worker_snapshot
 from app.auth.session_guard import get_current_session_user
 
 
@@ -36,3 +37,14 @@ def db_slow_queries():
     except Exception as exc:
         logging.error("读取慢查询摘要失败: %s", exc, exc_info=True)
         return jsonify({"success": False, "error": "读取慢查询摘要失败"}), 500
+
+
+@admin_bp.route("/jobs/workers")
+def job_workers():
+    if not _require_login():
+        return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
+    try:
+        return jsonify({"success": True, "data": get_worker_snapshot()})
+    except Exception as exc:
+        logging.error("读取 worker 任务状态失败: %s", exc, exc_info=True)
+        return jsonify({"success": False, "error": "读取 worker 任务状态失败"}), 500
