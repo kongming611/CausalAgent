@@ -68,72 +68,82 @@
 
 ## 3. 开发环境与项目事实
 
-- 桌面端入口是 `Run_causal.py`，它会加载 `http://127.0.0.1:5001`，因此必须先启动后端。
-- Flask 应用由 `app/__init__.py` 中的 `create_app()` 创建，并注册 `auth`、`chat`、`files`、`agent`、`main` 五个蓝图。
-- 应用启动前会先执行数据库就绪检查，见 `app/db.py` 中的 `check_database_readiness()`。
-- Web 层只负责短请求、创建 analysis job 和 SSE 事件推送；Agent/RAG/MCP 长任务由独立 worker 执行。
-- 后台 worker 入口是 `python -m app.agent.worker`；每个 worker slot 独立持有一个 MCP server process、一个 `ClientSession` 和一个编译好的 Agent graph。
-- 配置由 `config/settings.py` 从环境变量或项目根目录 `.env` 加载。
-- 前端当前是 Flask 静态页面方案，不是 Node/Vite/React 工程：
+- 桌面端入口是 `Run_causal.py`，它固定加载 `http://127.0.0.1:5001`；桌面模式本质上仍依赖先启动后端。
+- Web 后端入口是 `Causalchat.py`，它导入 `app/__init__.py` 中的 `create_app()` 生成 Flask app；本地直接运行时使用 `app.run(host='0.0.0.0', port=5001, debug=True, use_reloader=False)`，Docker 镜像默认通过 `gunicorn ... Causalchat:app` 启动。
+- `create_app()` 会先执行 `app/db.py` 中的 `check_database_readiness()`，确认数据库和关键表已就绪，然后再注册蓝图。
+- 当前实际注册的蓝图有 6 个：`auth`、`chat`、`files`、`agent`、`main`、`admin`。
+- Web 进程只负责登录态校验、短请求、analysis job 入队和 SSE 推送；Agent/RAG/MCP 长任务不在 Web 进程内执行，而是由独立 worker 进程处理。
+- 后台 worker 入口是 `python -m app.agent.worker`；worker 启动流程是：数据库就绪检查 -> 初始化 LLM -> 检查 RAG 可用性 -> 按 `JOB_WORKERS` 启动多个 slot。
+- 每个 worker slot 会独占一组 MCP server process、一个 `ClientSession` 和一个编译好的 Agent graph；真实执行单元是 slot，不是 Flask 请求线程。
+- 配置统一由 `config/settings.py` 从系统环境变量读取；若项目根目录存在 `.env`，会先通过 `python-dotenv` 加载到环境变量。
+- 前端当前仍是 Flask 静态资源方案，不是 Node/Vite/React 工程；关键文件是：
   - `app/static/chat.html`
   - `app/static/css/style.css`
   - `app/static/js/script.js`
-- 数据库初始化脚本位于 `Database/database_init.py`。
-- Alembic 迁移目录由 `alembic.ini` 指向 `Database/migrations`。
-- `Database/database_init.py` 只负责加载环境变量、确保数据库存在并检查连接；业务表结构由 Alembic 迁移维护。
-- 数据库生产化升级前应先执行 `Database/audit_before_db_upgrade.py`，检查孤立消息、孤立附件、非法附件类型和分区状态。
+- `Database/database_init.py` 只负责加载环境变量、确保数据库存在并检查连接；业务表结构维护入口是 Alembic，而不是这个脚本。
+- Alembic 迁移目录由 `alembic.ini` 指向 `Database/migrations`；业务 schema 变更应以迁移脚本为准。
+- 数据库生产化升级前应先执行 `Database/audit_before_db_upgrade.py`；它是只读审计，不会修改数据，重点检查孤立消息、孤立附件、非法附件类型和分区状态。
 - `app/db.py` 提供写库连接、业务读连接、复制状态观测连接、慢查询计时和从库延迟回退能力；`get_db_connection()` 仅作为兼容旧代码的主库写入口。
-- `analysis_jobs` 和 `analysis_job_events` 是长任务队列与 SSE 事件表；job 创建、领取、状态更新、事件写入和实时 SSE 读取必须走主库或强一致读。
-- 同一 `user_id + session_id` 同时只允许一个 `queued/running` job；数据库通过 `analysis_jobs.active_session_key` 生成列唯一约束兜底并发竞态。
-- 旧 `/api/send_stream` 已废弃；前端应使用 `POST /api/agent/jobs` 创建任务，再用 `GET /api/agent/jobs/<job_id>/events` 订阅 SSE。
-- 数据库账号按职责拆分：`MYSQL_WRITE_USER`/`MYSQL_WRITE_PASSWORD` 用于写库，`MYSQL_READ_USER`/`MYSQL_READ_PASSWORD` 用于业务读，`MYSQL_REPLICA_STATUS_USER`/`MYSQL_REPLICA_STATUS_PASSWORD` 只用于 `SHOW REPLICA STATUS`。旧变量 `MYSQL_USER`/`MYSQL_PASSWORD` 仅作为写/读账号兼容兜底，复制状态检查不会回退到旧业务账号。其中其中写账号对业务库授予了 `SELECT, INSERT, UPDATE, DELETE, CREATE, ALTER, INDEX, DROP, REFERENCES`，以支持 Alembic 在建表时创建外键。
-- `docker-compose.replica.yml` 提供本地 MySQL 主从拓扑：`mysql-primary`、`mysql-replica`、Web 应用容器和 worker 容器。本轮不做自动故障切换。
-- Docker 开发方式为主要目的，注意若更改数据库，env等文件，需要重构docker的环境。挂载以下知识库目录：
+- `get_read_connection(consistency='strong')` 固定读主库；`consistency='eventual'` 只会在从库复制状态正常且延迟不超过阈值时使用副本，否则安全回退主库。
+- `check_database_readiness()` 当前会检查 `users`、`sessions`、`chat_messages`、`chat_attachments`、`uploaded_files`、`archived_sessions`、`checkpoints`、`checkpoint_writes`、`analysis_jobs`、`analysis_job_events` 这些关键表是否已存在。
+- `analysis_jobs` 和 `analysis_job_events` 是当前长任务系统的真实持久化基础：前者是任务队列，后者是事件日志；job 创建、领取、状态更新、事件写入和 SSE 读取都必须走主库或强一致读。
+- 同一 `user_id + session_id` 同时只允许一个 `queued/running` job；当前实现不是 generated column，而是把 `active_session_key` 作为可空普通列，并通过唯一键 `uq_analysis_jobs_active_session` 兜底并发竞态。
+- 旧 `/api/send_stream` 只保留为迁移提示接口，返回 `410`；前端真实路径应使用 `POST /api/agent/jobs` 创建任务，再用 `GET /api/agent/jobs/<job_id>/events` 订阅 SSE，断线续传依赖 `Last-Event-ID`。
+- 数据库账号按职责拆分：
+  - `MYSQL_WRITE_USER` / `MYSQL_WRITE_PASSWORD`：应用写主库、迁移、启动检查用。
+  - `MYSQL_READ_USER` / `MYSQL_READ_PASSWORD`：业务读主库/从库数据用。
+  - `MYSQL_REPLICA_STATUS_USER` / `MYSQL_REPLICA_STATUS_PASSWORD`：只用于执行 `SHOW REPLICA STATUS`。
+  - `MYSQL_REPLICATION_USER` / `MYSQL_REPLICATION_PASSWORD`：只给 MySQL 从库复制通道拉 binlog 用。
+  - `MYSQL_USER` / `MYSQL_PASSWORD`：仅作为写/读账号兼容兜底，不承担复制状态检查职责。
+- `docker-compose.replica.yml` 是本地主从开发拓扑，当前包含 `mysql-primary`、`mysql-replica`、`app`、`worker` 四个服务；本轮仍不提供自动故障切换。
+- Docker 是当前首选开发方式；`docker-compose.replica.yml` 中 `app` 和 `worker` 都会挂载以下知识库目录：
   - `Agent/knowledge_base/models`
   - `Agent/knowledge_base/db`
-- RAG 启动时只做目录可用性检查；知识库目录不存在时允许后端以“无知识库模式”继续运行。
-- Windows 本地开发优先使用已有 Docker 环境；项目当前也支持 conda开发。注意：**主要使用docker开发**
+- RAG 启动期只检查知识库目录是否可用，不会在启动时完整加载向量库；若 `Agent/knowledge_base/db` 不存在，worker 会记录 warning，并以“无知识库模式”继续运行。
+
 
 ### 3.1 常用命令
 
-激活本地 conda 环境：
+激活本地 conda 环境（仅在不用 Docker 时）：
 
 ```bash
 conda activate causalchat
 ```
 
-如需显式说明 Python，项目既有环境为，若在本地环境找不到某个包，请注意切换python解释器：
-
-```bash
-~/.conda/envs/causalchat/python.exe
-```
-
-启动后端：
+本地启动后端：
 
 ```bash
 python Causalchat.py
 ```
 
-启动后台 worker：
+本地启动后台 worker：
 
 ```bash
 python -m app.agent.worker
 ```
 
-启动桌面端：
+本地启动桌面端：
 
 ```bash
 python Run_causal.py
 ```
 
 
-Docker 主从开发启动：
+Docker 主从开发启动（推荐）：
 
 ```bash
 docker-compose -f docker-compose.replica.yml up -d
 ```
 
-数据库初始化与迁移：
+首次启动、空卷重建或数据库环境重建后，推荐按下面顺序执行：
+
+```bash
+docker-compose -f docker-compose.replica.yml run --rm app python Database/database_init.py
+docker-compose -f docker-compose.replica.yml run --rm app python Database/audit_before_db_upgrade.py
+docker-compose -f docker-compose.replica.yml run --rm app alembic upgrade head
+```
+
+如果你当前不是在 Docker 里开发，再使用本地等价命令：
 
 ```bash
 python Database/database_init.py
@@ -152,6 +162,8 @@ Database/migrations/versions/*
 app/db.py
 相关 SQL 读写代码
 ```
+不要把“读写分离”简化成“所有 SELECT 都去副本”；先按一致性要求区分 strong read、eventual read 和必须写主库的实时路径。
+
 MYSQL_WRITE_USER：应用写主库、迁移、启动检查用。
 MYSQL_READ_USER：应用读主库/从库业务数据用。
 MYSQL_REPLICA_STATUS_USER：只给应用执行 SHOW REPLICA STATUS 用。
