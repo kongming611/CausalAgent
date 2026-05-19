@@ -32,6 +32,7 @@ def _parse_sse_payload(event_data: str) -> dict[str, Any]:
 
 async def _heartbeat_until_stopped(job_id: str, worker_id: str, stop: asyncio.Event) -> None:
     """在 job 执行期间定期刷新 heartbeat_at，直到 stop 被设置。"""
+    # 持续检查stop是否为true
     while not stop.is_set():
         await asyncio.sleep(settings.JOB_HEARTBEAT_INTERVAL_SECONDS)
         if stop.is_set():
@@ -70,10 +71,12 @@ async def _run_job(job: dict[str, Any], graph, worker_id: str) -> None:
     job_id = job["job_id"]
     stop_heartbeat = asyncio.Event()
     heartbeat_task = asyncio.create_task(_heartbeat_until_stopped(job_id, worker_id, stop_heartbeat))
+    # 标记是否该job是否结束
     terminal_seen = False
     final_result = None
 
     try:
+        ## 执行 AI流式传输
         logging.info("[worker] start job=%s worker=%s session=%s", job_id, worker_id, job["session_id"])
         async for event_data in agent_core.ai_call_stream(
             job["message"],
@@ -84,6 +87,7 @@ async def _run_job(job: dict[str, Any], graph, worker_id: str) -> None:
         ):
             payload = _parse_sse_payload(event_data)
             event_type = payload.get("type", "message")
+            # 将获取到的值落库
             await asyncio.to_thread(job_service.write_event, job_id, event_type, payload)
 
             if event_type in {"final_result", "interrupt"}:
@@ -106,6 +110,7 @@ async def _run_job(job: dict[str, Any], graph, worker_id: str) -> None:
     except Exception as exc:
         logging.error("[worker] job failed job=%s worker=%s error=%s", job_id, worker_id, exc, exc_info=True)
         await asyncio.to_thread(job_service.fail_job, job_id, str(exc))
+    ## 如果结束，停止心跳
     finally:
         stop_heartbeat.set()
         await heartbeat_task
@@ -145,6 +150,7 @@ async def _main_async() -> None:
 
     slot_count = max(1, settings.JOB_WORKERS)
     logging.info("[worker] starting slot_count=%s", slot_count)
+    # 获取_run_slot所有返回，并解包,单并不结束
     await asyncio.gather(*[_run_slot(i + 1) for i in range(slot_count)])
 
 

@@ -89,6 +89,7 @@ def stream_analysis_job_events(job_id: str):
     if not current_user:
         return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
 
+    # 校验该会话属于当前用户，防止前端篡改
     job = job_service.get_job_for_user(job_id, current_user["id"])
     if not job:
         return jsonify({"success": False, "error": "任务不存在"}), 404
@@ -101,12 +102,16 @@ def stream_analysis_job_events(job_id: str):
 
     def generate():
         """轮询事件表并生成 SSE；终态事件出现后结束连接。"""
+        # nonlocal是外部嵌套函数内的变量
         nonlocal after_id
         last_heartbeat = time.monotonic()
+        ## 循环监听
         while True:
             events = job_service.read_events_after(job_id, after_id)
             for row in events:
+                # 这里获取数据库中的id，并传给前端
                 after_id = int(row["id"])
+                ## payload事件具体包
                 payload = row["payload_json"] or {}
                 if isinstance(payload, dict) and "type" not in payload:
                     payload = {**payload, "type": row["event_type"]}
@@ -117,8 +122,9 @@ def stream_analysis_job_events(job_id: str):
             current_job = job_service.get_job_for_user(job_id, current_user["id"])
             if current_job and current_job["status"] in job_service.TERMINAL_STATUSES:
                 return
-
+            ## 返回单调递增的时间戳
             now = time.monotonic()
+            # 如果超过了心跳设置间隔，返回空包，保持连接
             if now - last_heartbeat >= settings.SSE_HEARTBEAT_INTERVAL_SECONDS:
                 yield _sse("heartbeat", {"type": "heartbeat", "job_id": job_id})
                 last_heartbeat = now

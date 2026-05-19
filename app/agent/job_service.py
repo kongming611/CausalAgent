@@ -30,6 +30,7 @@ def _json_dumps(value: Any) -> str:
 
 
 def _json_loads(value: Any) -> Any:
+    """将原本的 JSON 字符串反序列化为 Python 的字典或列表"""
     if value is None:
         return None
     if isinstance(value, (dict, list)):
@@ -45,6 +46,7 @@ def _session_title(message: str) -> str:
 
 
 def _row_to_job(row: dict[str, Any] | None) -> dict[str, Any] | None:
+    """数据清洗"""
     if not row:
         return None
     if "result_json" in row:
@@ -72,7 +74,7 @@ def get_active_job(user_id: int, session_id: str) -> dict[str, Any] | None:
 
 
 def get_job_for_user(job_id: str, user_id: int) -> dict[str, Any] | None:
-    """按 job_id 和用户校验读取 job，供 Web 鉴权后的查询使用。"""
+    """按 job_id 和用户校验读取 job，返回该用户job的所有值。"""
     with get_read_connection(consistency="strong") as conn:
         cursor = conn.cursor(dictionary=True)
         cursor.execute(
@@ -93,6 +95,7 @@ def create_job(user_id: int, session_id: str, message: str) -> tuple[dict[str, A
     try:
         cursor = conn.cursor(dictionary=True)
         conn.start_transaction()
+        # 如果主键重复，直接忽略，确保数据库里绝对有这一行数据，同时避免主键sessionid，延迟创建而重复插入崩溃。
         cursor.execute(
             """
             INSERT INTO sessions (id, user_id, title, created_at, last_activity_at, message_count)
@@ -101,6 +104,7 @@ def create_job(user_id: int, session_id: str, message: str) -> tuple[dict[str, A
             """,
             (session_id, user_id, _session_title(message), now, now),
         )
+        # 增加悲观锁，查看当前session属于当前用户
         cursor.execute(
             "SELECT id FROM sessions WHERE id = %s AND user_id = %s FOR UPDATE",
             (session_id, user_id),
@@ -158,7 +162,7 @@ def claim_next_job(worker_id: str, stale_after_seconds: int | None = None) -> di
     try:
         cursor = conn.cursor(dictionary=True)
         conn.start_transaction()
-        ## 执行抢任务，并锁住，立刻执行running
+        ## 执行抢任务，并锁住
         cursor.execute(
             f"""
             SELECT *
@@ -180,7 +184,7 @@ def claim_next_job(worker_id: str, stale_after_seconds: int | None = None) -> di
         if not job:
             conn.commit()
             return None
-
+        # 抢完任务之后，执行running
         cursor.execute(
             """
             UPDATE analysis_jobs
@@ -243,7 +247,7 @@ def write_event(job_id: str, event_type: str, payload: dict[str, Any]) -> int:
 
 
 def read_events_after(job_id: str, after_id: int = 0, limit: int = 100) -> list[dict[str, Any]]:
-    """读取某个 job 在指定事件 id 之后的新事件，供 SSE 断线续传使用。"""
+    """读取某个 job 在指定事件 id 之后的新事件，可以供 SSE 断线续传使用。"""
     with get_read_connection(consistency="strong") as conn:
         cursor = conn.cursor(dictionary=True)
         cursor.execute(

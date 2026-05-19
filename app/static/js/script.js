@@ -17,6 +17,7 @@ const csvUploaderInput = document.getElementById('csvUploader'); // 获取CSV上
 const uploadCsvButton = document.getElementById('uploadCsvButton'); // 获取上传按钮
 const chatArea = document.getElementById('chatArea');
 //全局变量存储当前会话的用户名
+//一个标签页里同时并行操作多个会话的话，会造成冲突
 let currentUsername = null;
 let currentSessionId = null; // < 全局变量跟踪当前会话ID
 let isNewSessionPendingDisplay = false; //  用于跟踪新会话是否已在UI中临时显示
