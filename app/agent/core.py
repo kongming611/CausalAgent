@@ -93,6 +93,8 @@ async def open_mcp_session(process_stack: AsyncExitStack):
     确保 slot = MCP session/process = graph instance。
     """
     server_params = StdioServerParameters(command=sys.executable, args=[mcp_server_path])
+    ## 这里enter_async_context(...) 会立刻执行它的 __aenter__()，真正打开资源
+    ## 同时，它的 __aexit__() 被登记到 process_stack这个栈，也就是只有__aexit__()被登记到栈里
     read_stream, write_stream = await process_stack.enter_async_context(stdio_client(server_params))
     session = await process_stack.enter_async_context(ClientSession(read_stream, write_stream))
     await session.initialize()
