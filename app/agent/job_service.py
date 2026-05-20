@@ -216,7 +216,7 @@ def get_job_by_id(job_id: str) -> dict[str, Any] | None:
 
 
 def update_heartbeat(job_id: str, worker_id: str) -> None:
-    """刷新 running job 的 worker 心跳，用于崩溃恢复判断。"""
+    """刷新 running job 的 worker 心跳，用于崩溃恢复判断。检测进程或者协是否正常"""
     with get_write_connection() as conn:
         cursor = conn.cursor()
         cursor.execute(

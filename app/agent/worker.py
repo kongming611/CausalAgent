@@ -70,6 +70,7 @@ async def _run_job(job: dict[str, Any], graph, worker_id: str) -> None:
     """执行单个 job，将 Agent 流式事件落库，并处理终态保存。"""
     job_id = job["job_id"]
     stop_heartbeat = asyncio.Event()
+    # 心跳检测协程是否正常进行
     heartbeat_task = asyncio.create_task(_heartbeat_until_stopped(job_id, worker_id, stop_heartbeat))
     # 标记是否该job是否结束
     terminal_seen = False
