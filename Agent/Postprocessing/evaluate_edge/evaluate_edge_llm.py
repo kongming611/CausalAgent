@@ -6,6 +6,8 @@ from Agent.causal_agent.state import CausalChatState
 from Agent.knowledge_base.query_rag import get_rag_excerpt
 import json
 import logging
+from config.settings import settings
+from app.agent.timeout_retry import retry_on_failure
 
 from Agent.causal_agent.back_prompt import evaluate_edge_prompt
 
@@ -83,12 +85,16 @@ def evaluate_edges_with_llm(
             
         runnable = prompt | llm.with_structured_output(EdgeEvaluation)
         
-        evaluation = runnable.invoke({
-            "final_edges": critical_edges,
-            "data_summary": json.dumps(analysis_parameters, ensure_ascii=False, indent=2),
-            "relevant_knowledge": knowledge_excerpt,
-            "system_role": evaluate_edge_prompt()
-        })
+        evaluation = retry_on_failure(
+            runnable.invoke,
+            {
+                "final_edges": critical_edges,
+                "data_summary": json.dumps(analysis_parameters, ensure_ascii=False, indent=2),
+                "relevant_knowledge": knowledge_excerpt,
+                "system_role": evaluate_edge_prompt()
+            },
+            max_retries=settings.LLM_MAX_RETRIES
+        )
         
         logging.info(f"  修改后列表: {evaluation.decision}, 理由: {evaluation.reason[:50]}...")
         

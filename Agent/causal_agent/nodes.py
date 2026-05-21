@@ -17,6 +17,7 @@ from langgraph.types import interrupt
 
 ## 基本配置
 from config.settings import settings
+from app.agent.timeout_retry import retry_on_failure
 
 ## 导入人设
 ## 因果分析人设
@@ -92,12 +93,14 @@ def agent_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     
     logging.info("正在调用LLM进行路由决策...")
     try:
-        decision_dict = runnable.invoke(
-            {
-                "messages": state["messages"][-1],
-                "has_tool_results": has_tool_results,
-                "final_report": state.get("final_report", None)
-            }
+        llm_input = {
+            "messages": state["messages"][-1],
+            "has_tool_results": has_tool_results,
+            "final_report": state.get("final_report", None)
+        }
+        decision_dict = retry_on_failure(
+            runnable.invoke, llm_input,
+            max_retries=settings.LLM_MAX_RETRIES
         )
         # 用Pydantic模型解析和验证这个字典
         structured_response = RouteQuery.model_validate(decision_dict)
@@ -199,7 +202,10 @@ def fold_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         ])
     try:
         runnable = prompt | llm | JsonOutputParser()
-        response = runnable.invoke({"messages": state["messages"]})
+        response = retry_on_failure(
+            runnable.invoke, {"messages": state["messages"]},
+            max_retries=settings.LLM_MAX_RETRIES
+        )
 
         structured_response = foldQuery.model_validate(response)
 
@@ -401,10 +407,14 @@ def preprocess_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
     logging.info("正在调用LLM生成数据分析总结...")
     
     
-    preprocess_summary = runnable.invoke({
-        "data_summary": json.dumps(analysis_parameters, indent=2, ensure_ascii=False),
-        "system_role": data_prompt()
-    })
+    preprocess_summary = retry_on_failure(
+        runnable.invoke,
+        {
+            "data_summary": json.dumps(analysis_parameters, indent=2, ensure_ascii=False),
+            "system_role": data_prompt()
+        },
+        max_retries=settings.LLM_MAX_RETRIES
+    )
     logging.info(f"LLM数据总结结果: {preprocess_summary}")
 
     # 4. 更新状态并返回新消息
@@ -684,15 +694,19 @@ def report_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         include_evidence=True
     )
 
-    response = runnable.invoke({
-        "messages": state["messages"],
-        "preprocess_meta_data": meta_data,
-        "preprocess_summary": state.get("preprocess_summary", {}),
-        "causal_analysis_result": state.get("causal_analysis_result", {}),
-        "knowledge_base_result": knowledge_summary,
-        "postprocess_result": state.get("postprocess_result", {}),
-        "system_role": causal_report_prompt()
-    })
+    response = retry_on_failure(
+        runnable.invoke,
+        {
+            "messages": state["messages"],
+            "preprocess_meta_data": meta_data,
+            "preprocess_summary": state.get("preprocess_summary", {}),
+            "causal_analysis_result": state.get("causal_analysis_result", {}),
+            "knowledge_base_result": knowledge_summary,
+            "postprocess_result": state.get("postprocess_result", {}),
+            "system_role": causal_report_prompt()
+        },
+        max_retries=settings.LLM_MAX_RETRIES
+    )
 
     logging.info(f"LLM报告结果: {response}")
 
@@ -743,9 +757,11 @@ def normal_chat_node(state: CausalChatState,llm: ChatOpenAI) -> dict:
         ]
     )
     runnable = prompt | llm | StrOutputParser()
-    response = runnable.invoke({
-        "messages": state["messages"],
-    })
+    response = retry_on_failure(
+        runnable.invoke,
+        {"messages": state["messages"]},
+        max_retries=settings.LLM_MAX_RETRIES
+    )
     # 只返回新消息
     return {"messages": [AIMessage(content=response, name="normal_chat")]}
 
@@ -781,14 +797,18 @@ def inquiry_answer_node(state: CausalChatState, llm: ChatOpenAI) -> dict:
         include_evidence=True
     )
 
-    response = runnable.invoke({
-        "messages": state["messages"],
-        "causal_analysis_result": state.get("causal_analysis_result", {}),
-        "knowledge_base_result": knowledge_summary,
-        "postprocess_result": state.get("postprocess_result", {}),
-        "final_report": state.get("final_report", {}),
-        "system_role": causal_prompt()
-    })
+    response = retry_on_failure(
+        runnable.invoke,
+        {
+            "messages": state["messages"],
+            "causal_analysis_result": state.get("causal_analysis_result", {}),
+            "knowledge_base_result": knowledge_summary,
+            "postprocess_result": state.get("postprocess_result", {}),
+            "final_report": state.get("final_report", {}),
+            "system_role": causal_prompt()
+        },
+        max_retries=settings.LLM_MAX_RETRIES
+    )
     # 只返回新消息
     return {"messages": [AIMessage(content=response, name="inquiry_answer")]}
 

@@ -3,6 +3,7 @@
 实现 LLM 动态选择 MCP 工具的机制
 """
 from langgraph.func import task
+import asyncio
 import logging
 from mcp import ClientSession
 from typing import List, Dict, Optional
@@ -12,6 +13,8 @@ from langchain_openai import ChatOpenAI
 from Agent.causal_agent.state import CausalChatState
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import ChatPromptTemplate
+from config.settings import settings
+from app.agent.timeout_retry import retry_on_failure, retry_on_failure_async, call_with_timeout_and_retry_async
 
 class ToolSelection(BaseModel):
     """LLM 工具选择的结果模型"""
@@ -56,7 +59,10 @@ async def select_causal_tool(
         选中的工具名称，如果选择失败返回 None
     """
     logging.info("正在获取 MCP 可用工具列表...")
-    tools_response = await mcp_session.list_tools()
+    tools_response = await asyncio.wait_for(
+        mcp_session.list_tools(),
+        timeout=settings.MCP_TIMEOUT
+    )
     causal_tools = tools_response.tools
 
     if not causal_tools:
@@ -92,12 +98,16 @@ async def select_causal_tool(
 
     try:
         runnable = prompt | llm | JsonOutputParser()
-        response = runnable.invoke({
-            "tools_description": tools_description,
-            "messages": state["messages"],
-            "data_summary": json.dumps(state.get("analysis_parameters", {}), indent=2, ensure_ascii=False),
-            "preprocess_summary": state.get("preprocess_summary", ""),
-        })
+        response = retry_on_failure(
+            runnable.invoke,
+            {
+                "tools_description": tools_description,
+                "messages": state["messages"],
+                "data_summary": json.dumps(state.get("analysis_parameters", {}), indent=2, ensure_ascii=False),
+                "preprocess_summary": state.get("preprocess_summary", ""),
+            },
+            max_retries=settings.LLM_MAX_RETRIES
+        )
 
         selection = ToolSelection.model_validate(response)
         logging.info(f"LLM 选择工具: {selection.selected_tool}，理由: {selection.reason}")
@@ -152,9 +162,12 @@ async def causal_analysis_task(
 
         logging.info(f"使用工具: {selected_tool}")
 
-        tool_response = await mcp_session.call_tool(
+        tool_response = await call_with_timeout_and_retry_async(
+            mcp_session.call_tool,
             selected_tool,
-            {"csv_data": file_content}
+            {"csv_data": file_content},
+            timeout=settings.MCP_TIMEOUT,
+            max_retries=settings.MCP_MAX_RETRIES
         )
 
         result = json.loads(tool_response.content[0].text)

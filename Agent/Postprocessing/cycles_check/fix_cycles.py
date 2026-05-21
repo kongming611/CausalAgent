@@ -7,6 +7,8 @@ from Agent.causal_agent.state import CausalChatState
 from Agent.knowledge_base.query_rag import get_rag_excerpt
 import json
 import logging
+from config.settings import settings
+from app.agent.timeout_retry import retry_on_failure
 
 class CycleFixDecision(BaseModel):
     """LLM决策删除哪条边来打破环路的结构化输出。"""
@@ -85,11 +87,15 @@ def fix_cycles_with_llm(
             
             runnable = prompt | llm.with_structured_output(CycleFixDecision)
             
-            decision = runnable.invoke({
-                "cycle_description": cycle_description,
-                "data_summary": json.dumps(analysis_parameters, ensure_ascii=False, indent=2),
-                "knowledge_excerpt": knowledge_excerpt
-            })
+            decision = retry_on_failure(
+                runnable.invoke,
+                {
+                    "cycle_description": cycle_description,
+                    "data_summary": json.dumps(analysis_parameters, ensure_ascii=False, indent=2),
+                    "knowledge_excerpt": knowledge_excerpt
+                },
+                max_retries=settings.LLM_MAX_RETRIES
+            )
             
             # 解析LLM的决策
             edge_to_remove = decision.remove_edge

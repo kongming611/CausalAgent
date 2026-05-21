@@ -58,6 +58,7 @@ def initialize_llm():
         base_url=settings.BASE_URL,
         api_key=settings.API_KEY,
         streaming=False,
+        request_timeout=settings.LLM_TIMEOUT,
     )
     logging.info("LLM 实例初始化成功。")
 
@@ -251,11 +252,21 @@ async def ai_call_stream(text, user_id, username, session_id):
     final_state_data = None
     interrupt_info = None
     last_node = None
-    
+
+    # 整体超时：防止某个节点卡死导致 SSE 永远不结束
+    overall_timeout = settings.LLM_TIMEOUT + settings.MCP_TIMEOUT + 120
+    stream_start_time = time.time()
+
     try:
         # 使用 astream 流式执行，捕获节点更新
         # stream_mode="updates" 会在每个节点执行后返回更新
         async for chunk in agent_graph.astream(input_data, config, stream_mode="updates"):
+            # 检查整体超时
+            elapsed = time.time() - stream_start_time
+            if elapsed > overall_timeout:
+                logging.error(f"[超时] Agent 执行超过整体超时限制 ({overall_timeout}s)，强制中止")
+                yield f"data: {json.dumps({'type': 'error', 'message': f'执行超时（已用 {int(elapsed)} 秒），请重置会话后重试'}, ensure_ascii=False)}\n\n"
+                return
             logging.info(f"[SSE] 收到更新: {list(chunk.keys())}")
             
             # chunk的格式: {node_name: node_output}

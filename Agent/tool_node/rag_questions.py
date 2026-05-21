@@ -11,6 +11,8 @@ from pydantic import BaseModel, Field
 
 from Agent.causal_agent.back_prompt import causal_rag_prompt
 from Agent.causal_agent.state import CausalChatState
+from config.settings import settings
+from app.agent.timeout_retry import retry_on_failure
 
 
 class RagQuestionItem(BaseModel):
@@ -89,14 +91,16 @@ system role: {system_role}
         question_generator_runnable = rag_prompt | llm | JsonOutputParser()
         logging.info("正在调用LLM生成结构化RAG查询问题...")
 
-        llm_output = question_generator_runnable.invoke(
+        llm_output = retry_on_failure(
+            question_generator_runnable.invoke,
             {
                 "messages": _format_messages(state["messages"]),
                 "data_summary": json.dumps(state.get("analysis_parameters", {}), indent=2, ensure_ascii=False),
                 "preprocess_summary": state.get("preprocess_summary", ""),
                 "system_role": causal_rag_prompt(),
                 "num_questions": num_questions,
-            }
+            },
+            max_retries=settings.LLM_MAX_RETRIES
         )
 
         response = RagQuestionBundle.model_validate(llm_output)

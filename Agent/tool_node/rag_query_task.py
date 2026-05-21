@@ -2,11 +2,14 @@
 @task封装的RAG查询任务
 """
 import logging
+import asyncio
 from typing import Dict, List, Union
 
 from langgraph.func import task
 
 from Agent.knowledge_base.query_rag import get_rag_response
+from config.settings import settings
+from app.agent.timeout_retry import retry_on_failure
 
 
 @task
@@ -22,10 +25,15 @@ def rag_query_task(questions: List[Union[str, Dict]]) -> Dict:
     """
     logging.info("正在启动RAG查询任务...")
     try:
-        rag_response = get_rag_response(questions)
+        # 使用线程池包装同步调用并添加超时
+        loop = asyncio.get_event_loop()
+        rag_response = retry_on_failure(
+            get_rag_response, questions,
+            max_retries=settings.RAG_MAX_RETRIES
+        )
         logging.info("Task: 知识库查询完成")
         return rag_response
-    
+
     except Exception as exc:
         logging.error(f"Task: 知识库查询失败: {exc}", exc_info=True)
         return {

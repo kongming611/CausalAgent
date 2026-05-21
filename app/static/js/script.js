@@ -874,7 +874,7 @@ function handleInterrupt(eventData, thinkingElements) {
  */
 function handleStreamError(eventData, thinkingElements) {
     const { message } = eventData;
-    
+
     // 移除思考过程的两个独立元素
     if (thinkingElements.bubble && thinkingElements.bubble.parentNode) {
         thinkingElements.bubble.parentNode.removeChild(thinkingElements.bubble);
@@ -882,12 +882,55 @@ function handleStreamError(eventData, thinkingElements) {
     if (thinkingElements.detailContainer && thinkingElements.detailContainer.parentNode) {
         thinkingElements.detailContainer.parentNode.removeChild(thinkingElements.detailContainer);
     }
-    
-    // 显示错误消息
-    addMessage('ai', {
-        type: 'text',
-        summary: `错误：${message}`
-    });
+
+    // 创建包含重置按钮的错误消息
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'message ai-message';
+
+    const errorText = document.createElement('div');
+    errorText.className = 'message-content';
+    const errorP = document.createElement('p');
+    errorP.textContent = `错误：${message}`;
+    errorText.appendChild(errorP);
+    errorDiv.appendChild(errorText);
+
+    const resetBtn = document.createElement('button');
+    resetBtn.className = 'reset-session-btn';
+    resetBtn.textContent = '重置会话';
+    resetBtn.style.cssText = 'margin-top:8px;padding:6px 16px;background:#e74c3c;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:13px;';
+    resetBtn.onclick = async () => {
+        resetBtn.disabled = true;
+        resetBtn.textContent = '重置中...';
+        try {
+            const resp = await fetch('/api/reset_session', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session_id: currentSessionId })
+            });
+            const result = await resp.json();
+            if (result.success) {
+                resetBtn.textContent = '已重置';
+                resetBtn.style.background = '#27ae60';
+                // 重新启用输入
+                const input = document.getElementById('userInput');
+                const btn = document.getElementById('sendButton');
+                if (input) { input.disabled = false; input.focus(); }
+                if (btn) btn.disabled = false;
+            } else {
+                resetBtn.textContent = '重置失败';
+                resetBtn.style.background = '#999';
+                console.error('重置失败:', result.error);
+            }
+        } catch (e) {
+            resetBtn.textContent = '重置失败';
+            resetBtn.style.background = '#999';
+            console.error('重置请求异常:', e);
+        }
+    };
+    errorDiv.appendChild(resetBtn);
+
+    chatArea.appendChild(errorDiv);
+    chatArea.scrollTop = chatArea.scrollHeight;
 }
 
 

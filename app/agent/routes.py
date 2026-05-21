@@ -11,6 +11,37 @@ import json
 
 agent_bp = Blueprint('agent', __name__, url_prefix='/api')
 
+
+@agent_bp.route('/reset_session', methods=['POST'])
+def reset_session():
+    """
+    重置指定会话的 agent 状态（清除 LangGraph checkpoint，保留聊天历史）。
+    前端在收到 error 事件后调用此接口，允许用户重新发送消息。
+    """
+    if 'user_id' not in session:
+        return jsonify({'success': False, 'error': '用户未登录或会话已过期'}), 401
+
+    data = request.json
+    session_id = data.get('session_id')
+    if not session_id:
+        return jsonify({'success': False, 'error': '缺少 session_id'}), 400
+
+    try:
+        graph = agent_core.agent_graph
+        if graph is None:
+            return jsonify({'success': False, 'error': 'Agent 未初始化'}), 500
+
+        checkpointer = graph.checkpointer
+        if checkpointer is None:
+            return jsonify({'success': False, 'error': 'Checkpointer 未启用'}), 500
+
+        checkpointer.delete_thread(session_id)
+        logging.info(f"[重置] 已清除会话 {session_id} 的 agent checkpoint")
+        return jsonify({'success': True, 'message': '会话状态已重置'})
+    except Exception as e:
+        logging.error(f"[重置] 清除 checkpoint 失败: {e}", exc_info=True)
+        return jsonify({'success': False, 'error': f'重置失败: {str(e)}'}), 500
+
 @agent_bp.route('/send_stream', methods=['POST'])
 def handle_message_stream():
     """

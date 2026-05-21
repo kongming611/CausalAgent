@@ -53,14 +53,22 @@ class AppConfig:
         self.MYSQL_PASSWORD = self._get_config("MYSQL_PASSWORD")
         self.MYSQL_DATABASE = self._get_config("MYSQL_DATABASE")
         
-        # LangSmith 
+        # LangSmith
         # 可选配置不强制要求，缺失时使用默认值
         self.LANGCHAIN_API_KEY = self._get_config("LANGCHAIN_API_KEY", required=False)
         self.LANGCHAIN_PROJECT = self._get_config(
-            "LANGCHAIN_PROJECT", 
-            required=False, 
+            "LANGCHAIN_PROJECT",
+            required=False,
             default="CausalChat-Default-Project"
         )
+
+        # 超时与重试配置（可选，有默认值）
+        self.LLM_TIMEOUT = int(self._get_config("LLM_TIMEOUT", required=False, default="120"))
+        self.LLM_MAX_RETRIES = int(self._get_config("LLM_MAX_RETRIES", required=False, default="2"))
+        self.MCP_TIMEOUT = int(self._get_config("MCP_TIMEOUT", required=False, default="300"))
+        self.MCP_MAX_RETRIES = int(self._get_config("MCP_MAX_RETRIES", required=False, default="1"))
+        self.RAG_TIMEOUT = int(self._get_config("RAG_TIMEOUT", required=False, default="60"))
+        self.RAG_MAX_RETRIES = int(self._get_config("RAG_MAX_RETRIES", required=False, default="1"))
 
         # 初始化完成后，自动设置 LangSmith
         self._setup_langsmith()
