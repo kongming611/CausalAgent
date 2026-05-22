@@ -17,6 +17,7 @@ const csvUploaderInput = document.getElementById('csvUploader'); // 获取CSV上
 const uploadCsvButton = document.getElementById('uploadCsvButton'); // 获取上传按钮
 const chatArea = document.getElementById('chatArea');
 //全局变量存储当前会话的用户名
+//一个标签页里同时并行操作多个会话的话，会造成冲突
 let currentUsername = null;
 let currentSessionId = null; // < 全局变量跟踪当前会话ID
 let isNewSessionPendingDisplay = false; //  用于跟踪新会话是否已在UI中临时显示
@@ -594,8 +595,7 @@ async function sendMessage() {
     const thinkingElements = addThinkingMessage();
 
     try {
-        // 使用流式端点
-        const response = await fetch('/api/send_stream', {
+        const response = await fetch('/api/agent/jobs', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
@@ -607,37 +607,12 @@ async function sendMessage() {
             })
         });
 
-        if (!response.ok) {
-            throw new Error(`HTTP错误: ${response.status}`);
+        const jobData = await response.json();
+        if (!response.ok || !jobData.success) {
+            throw new Error(jobData.error || `HTTP错误: ${response.status}`);
         }
 
-        // 使用ReadableStream读取SSE数据
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-        
-        while (true) {
-            const { done, value } = await reader.read();
-            
-            if (done) break;
-            
-            buffer += decoder.decode(value, { stream: true });
-            
-            // 解析SSE消息（以 \n\n 分隔）
-            const messages = buffer.split('\n\n');
-            buffer = messages.pop(); // 保留不完整的消息
-            
-            for (const msg of messages) {
-                if (msg.startsWith('data: ')) {
-                    try {
-                        const eventData = JSON.parse(msg.substring(6)); // 去掉 "data: " 前缀
-                        handleStreamEvent(eventData, thinkingElements);
-                    } catch (e) {
-                        console.warn('解析SSE事件失败:', msg, e);
-                    }
-                }
-            }
-        }
+        await subscribeToJobEvents(jobData.job_id, thinkingElements);
         
         // 加载历史记录
         loadHistory();
@@ -660,6 +635,57 @@ async function sendMessage() {
         sendButton.disabled = false;
         userInput.focus(); // 重新聚焦到输入框，方便用户继续输入
     }
+}
+
+function subscribeToJobEvents(jobId, thinkingElements) {
+    return new Promise((resolve, reject) => {
+        const source = new EventSource(`/api/agent/jobs/${encodeURIComponent(jobId)}/events`);
+        let settled = false;
+
+        const finish = (error = null) => {
+            if (settled) {
+                return;
+            }
+            settled = true;
+            source.close();
+            if (error) {
+                reject(error);
+            } else {
+                resolve();
+            }
+        };
+
+        const bindEvent = (type) => {
+            source.addEventListener(type, (event) => {
+                if (!event.data) {
+                    return;
+                }
+                try {
+                    const eventData = JSON.parse(event.data);
+                    eventData.type = eventData.type || type;
+                    if (eventData.type === 'heartbeat') {
+                        return;
+                    }
+                    handleStreamEvent(eventData, thinkingElements);
+                    if (eventData.type === 'final_result' || eventData.type === 'interrupt') {
+                        finish();
+                    } else if (eventData.type === 'error') {
+                        finish(new Error(eventData.message || '任务执行失败'));
+                    }
+                } catch (error) {
+                    finish(error);
+                }
+            });
+        };
+
+        ['node_start', 'node_end', 'final_result', 'interrupt', 'error', 'heartbeat'].forEach(bindEvent);
+
+        source.onerror = (event) => {
+            if (!settled && event && !event.data) {
+                console.warn('SSE连接中断，浏览器将尝试自动重连。');
+            }
+        };
+    });
 }
 
 

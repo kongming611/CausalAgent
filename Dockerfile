@@ -14,8 +14,7 @@ RUN apt-get update && apt-get install -y \
 # 先安装基础依赖（很少变化）
 COPY requirements-base.txt .
 RUN pip install --no-cache-dir -r requirements-base.txt \
-    --trusted-host pypi.tuna.tsinghua.edu.cn \
-    -i https://pypi.tuna.tsinghua.edu.cn/simple
+    -i https://mirrors.aliyun.com/pypi/simple/ --trusted-host mirrors.aliyun.com
 
 # 再安装所有依赖（包括新增的）
 COPY requirements.txt .
@@ -25,5 +24,5 @@ COPY . .
 
 EXPOSE 5001
 
-CMD ["python", "Causalchat.py"]
+CMD ["sh", "-c", "gunicorn --bind 0.0.0.0:5001 --workers ${WEB_WORKERS:-1} --threads ${WEB_THREADS:-12} --timeout ${WEB_TIMEOUT:-120} Causalchat:app"]
 

@@ -2,10 +2,8 @@
 app.chat.routes - 聊天路由
 '''
 from flask import Blueprint, request, jsonify, session
-from app.chat.services import get_chat_history
-from app.db import get_db_connection
+from app.auth.session_guard import get_current_session_user
 import logging
-import mysql.connector
 import json
 from Agent.Report.Metadata_sum import replace_placeholders
 
@@ -15,11 +13,12 @@ import uuid
 # 新对话
 @chat_bp.route('/new_chat',methods=['POST'])
 def new_chat():
-    if 'user_id' not in session:
-        return jsonify({'success': False, 'error': '用户未登录'}), 401
+    current_user = get_current_session_user()
+    if not current_user:
+        return jsonify({'success': False, 'error': '用户未登录或会话已过期'}), 401
     
-    user_id = session['user_id']
-    username = session.get('username', '未知用户')
+    user_id = current_user['id']
+    username = current_user['username']
     new_session_id = str(uuid.uuid4())
 
     # 核心修改：不再立即创建数据库记录，只生成session_id
@@ -30,14 +29,18 @@ def new_chat():
 # 会话管理接口,获取会话
 @chat_bp.route('/sessions')
 def get_sessions():
-    if 'user_id' not in session:
+    import mysql.connector
+    from app.db import get_read_connection
+
+    current_user = get_current_session_user()
+    if not current_user:
         return jsonify({"error": "用户未登录或会话已过期"}), 401
     
-    user_id = session['user_id']
+    user_id = current_user['id']
     logging.info(f"用户 {user_id} 请求会话列表 (新版逻辑)")
 
     try:
-        with get_db_connection() as conn:
+        with get_read_connection(consistency="eventual") as conn:
             cursor = conn.cursor(dictionary=True)
             # 高效地直接从 sessions 表查询
             cursor.execute("""
@@ -74,11 +77,15 @@ def get_sessions():
 # 加载特定会话内容 
 @chat_bp.route('/load_session')
 def load_session_content():
-    if 'user_id' not in session:
+    import mysql.connector
+    from app.db import get_read_connection
+
+    current_user = get_current_session_user()
+    if not current_user:
         return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
     
-    user_id = session['user_id']
-    username = session['username']
+    user_id = current_user['id']
+    username = current_user['username']
 
     session_id = request.args.get('session')
 
@@ -89,7 +96,7 @@ def load_session_content():
 
     messages = []
     try:
-        with get_db_connection() as conn:
+        with get_read_connection(consistency="strong") as conn:
             cursor = conn.cursor(dictionary=True)
 
             # 处理延迟创建的session
@@ -175,11 +182,15 @@ def load_session_content():
 ## 更改会话
 @chat_bp.route('/change_session', methods=['POST'])
 def change_session():
+    import mysql.connector
+    from app.db import get_write_connection
+
     #  用户认证检查 
-    if 'user_id' not in session:
+    current_user = get_current_session_user()
+    if not current_user:
         return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
     
-    user_id = session['user_id']
+    user_id = current_user['id']
     
     #  修改：从 POST 请求的 JSON body 中获取数据 
     data = request.json
@@ -190,7 +201,7 @@ def change_session():
         return jsonify({"success": False, "error": "缺少标题或会话ID"}), 400
 
     try:
-        with get_db_connection() as conn:
+        with get_write_connection() as conn:
             #  增加 user_id 条件以确保安全，并处理延迟创建的session 
             cursor = conn.cursor()
             cursor.execute(
@@ -223,11 +234,15 @@ def change_session():
 ## 删除会话
 @chat_bp.route('/delete_session', methods=['POST'])
 def delete_session():
+    import mysql.connector
+    from app.db import get_write_connection
+
     #  核心修改：安全和完整的删除逻辑，支持延迟创建 
-    if 'user_id' not in session:
+    current_user = get_current_session_user()
+    if not current_user:
         return jsonify({"success": False, "error": "用户未登录或会话已过期"}), 401
     
-    user_id = session['user_id']
+    user_id = current_user['id']
     data = request.json
     session_id = data.get('session_id')
 
@@ -235,7 +250,7 @@ def delete_session():
         return jsonify({"success": False, "error": "缺少会话ID"}), 400
 
     try:
-        with get_db_connection() as conn:
+        with get_write_connection() as conn:
             cursor = conn.cursor()
             
             # 开启事务
@@ -260,6 +275,19 @@ def delete_session():
                     # 有消息但session记录不存在，清理孤立的消息
                     logging.warning(f"发现用户 {user_id} 的会话 {session_id} 有孤立消息，正在清理")
             # 
+
+            cursor.execute("""
+                SELECT 1
+                FROM analysis_jobs
+                WHERE session_id = %s
+                  AND user_id = %s
+                  AND status IN ('queued', 'running')
+                LIMIT 1
+            """, (session_id, user_id))
+            if cursor.fetchone():
+                conn.rollback()
+                logging.info(f"用户 {user_id} 尝试删除仍有 active job 的会话 {session_id}")
+                return jsonify({"success": False, "error": "当前会话仍有任务正在运行，请等待完成后再删除"}), 409
 
             # 1. 删除与该会话相关的附件 (通过连接 chat_messages)
             # 这是为了处理 chat_attachments 和 chat_messages 之间没有直接外键的情况

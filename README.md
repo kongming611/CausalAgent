@@ -2,7 +2,7 @@
 
 
 <p align="center">
-<img src="./readme_img/causalAgent.png" alt="Logo">
+<img src="./readme_img/CausalAgent.png" alt="Logo">
 </p>
 
 <h1 align="center">
@@ -55,6 +55,7 @@ CausalAgent
   - [报告生成](#报告生成)
 - [快速开始 | Quick Start](#快速开始--quick-start)
   - [Docker部署](#docker部署)
+    - [数据库生产化配置](#数据库生产化配置)
   - [windows部署](#windows部署)
 - [贡献](#贡献)
 - [Star 趋势](#star-趋势)
@@ -197,15 +198,51 @@ API_KEY=
 # 本地开发：使用 'localhost' 或 '127.0.0.1'
 MYSQL_HOST=mysql
 
-# 数据库用户名
-MYSQL_USER=
+# 旧版兼容账号。未配置拆分账号时，写/读连接会回退使用它。
+MYSQL_USER=pyramid
 
 MYSQL_ROOT_PASSWORD=
-# 数据库密码
 MYSQL_PASSWORD=
 
 # 数据库名称
 MYSQL_DATABASE=
+
+# 应用写账号：用于主库写入、迁移和数据库就绪检查。
+MYSQL_WRITE_USER=pyramid_writer
+MYSQL_WRITE_PASSWORD=
+
+# 应用读账号：用于主库/从库业务查询，建议只授予业务库 SELECT。
+MYSQL_READ_USER=pyramid_reader
+MYSQL_READ_PASSWORD=
+
+# 复制状态检查账号：只用于 SHOW REPLICA STATUS，缺失时 eventual 读会回退主库。
+MYSQL_REPLICA_STATUS_USER=replica_status
+MYSQL_REPLICA_STATUS_PASSWORD=
+
+# 复制通道账号：只用于从库拉取主库 binlog。
+MYSQL_REPLICATION_USER=replica
+MYSQL_REPLICATION_PASSWORD=
+
+MYSQL_WRITE_HOST=mysql-primary
+MYSQL_READ_HOSTS=mysql-replica
+
+MYSQL_PORT=3306
+MYSQL_POOL_SIZE_WRITE=5
+MYSQL_POOL_SIZE_READ=5
+MYSQL_REPLICA_MAX_LAG_SECONDS=2
+MYSQL_QUERY_WARN_MS=500
+
+# Web/后台任务并发配置
+WEB_WORKERS=1
+WEB_THREADS=12
+WEB_TIMEOUT=120
+JOB_WORKERS=2
+JOB_HEARTBEAT_INTERVAL_SECONDS=10
+JOB_STALE_AFTER_SECONDS=120
+JOB_MAX_ATTEMPTS=3
+
+MAX_UPLOAD_SIZE_MB=20
+
 
 # LangSmith API 密钥(不强制)
 LANGCHAIN_API_KEY=
@@ -216,13 +253,48 @@ LANGCHAIN_PROJECT=
 ```
 3. 在项目根目录运行docker-compose
 ```bash
-docker-compose up -d
+docker-compose -f docker-compose.replica.yml up -d
 ```
+
+4. 运行数据库迁移
+```bash
+docker-compose -f docker-compose.replica.yml run --rm app python Database/database_init.py
+docker-compose -f docker-compose.replica.yml run --rm app alembic upgrade head
+```
+
+如果是已有旧数据、准备做生产化升级，再额外先执行：
+
+```bash
+docker-compose -f docker-compose.replica.yml run --rm app python Database/audit_before_db_upgrade.py
+```
+
 > [!IMPORTANT]
 > **知识库仍然在构建，所以知识库查询功能暂不可用**
 
+#### 数据库生产化配置
+
+主从开发：
+
+如果你已经启动过 `mysql-primary` 或 `mysql-replica`，修复后要使用新的空 volume 重建；否则 `/docker-entrypoint-initdb.d` 初始化脚本不会重新执行。
+
+主从模式下数据库账号按职责拆分：
+
+- 写账号：`MYSQL_WRITE_USER` / `MYSQL_WRITE_PASSWORD`，用于应用写主库、Alembic 迁移和启动就绪检查；缺失时兼容回退到 `MYSQL_USER` / `MYSQL_PASSWORD`。
+- 读账号：`MYSQL_READ_USER` / `MYSQL_READ_PASSWORD`，用于 `get_read_connection()` 的主库强一致读和从库弱一致读；缺失时兼容回退到 `MYSQL_USER` / `MYSQL_PASSWORD`。
+- 复制状态检查账号：`MYSQL_REPLICA_STATUS_USER` / `MYSQL_REPLICA_STATUS_PASSWORD`，只用于读取 `SHOW REPLICA STATUS`；缺失或不可用时，`eventual` 读安全回退主库读连接。
+- 复制通道账号：`MYSQL_REPLICATION_USER` / `MYSQL_REPLICATION_PASSWORD`，只用于 MySQL 主从复制链路，不参与应用业务查询。
+
+管理接口：
+
+- `GET /api/admin/db/health`
+- `GET /api/admin/db/slow-queries`
+- `GET /api/admin/jobs/workers`
+
+
 
 ### windows部署
+
+**不推荐使用windows部署，会有意想不到的问题**
 
 项目采用前后端分离的设计，需要同时运行后端服务和前端应用。
 
@@ -271,15 +343,30 @@ docker-compose up -d
     # 本地开发：使用 'localhost' 或 '127.0.0.1'
     MYSQL_HOST=mysql
 
-    # 数据库用户名
+    # 旧版兼容账号。未配置拆分账号时，写/读连接会回退使用它。
     MYSQL_USER=
 
     MYSQL_ROOT_PASSWORD=
-    # 数据库密码
     MYSQL_PASSWORD=
 
     # 数据库名称
     MYSQL_DATABASE=
+
+    # 应用写账号
+    MYSQL_WRITE_USER=
+    MYSQL_WRITE_PASSWORD=
+
+    # 应用读账号
+    MYSQL_READ_USER=
+    MYSQL_READ_PASSWORD=
+
+    # 复制状态检查账号。缺失时 eventual 读回退主库。
+    MYSQL_REPLICA_STATUS_USER=
+    MYSQL_REPLICA_STATUS_PASSWORD=
+
+    # 复制通道账号
+    MYSQL_REPLICATION_USER=replica
+    MYSQL_REPLICATION_PASSWORD=
 
     # LangSmith API 密钥(不强制)
     LANGCHAIN_API_KEY=
@@ -293,22 +380,26 @@ docker-compose up -d
 需要预先安装mysql数据库
 在项目根目录下打开一个终端，运行以下命令：
 ```bash
-python database_init.py
+python Database/database_init.py
 alembic upgrade head
 ```
- Database/database_init.py 负责创建数据库和基础表结构；Alembic 迁移脚本负责在此基础上做结构升级。
- - 全新安装时先运行  Database/database_init.py，再执行 alembic upgrade head；
- - 已有历史数据的环境只需要执行 alembic upgrade head 即可。
+`Database/database_init.py` 负责确保数据库存在和连接可用；业务表结构由 Alembic 迁移脚本维护。全新空库直接执行 `alembic upgrade head` 即可；已有历史数据的环境应先执行审计脚本，确认无孤立消息、孤立附件和非法附件类型后再升级。
 
 9. 启动后端服务
 
-在项目根目录下打开一个终端，运行以下命令：
+在项目根目录下打开一个终端，运行 Web 层：
 
 ```bash
 python Causalchat.py
 ```
 
-首次运行时，程序会自动连接到你在 `secrets.json` 中配置的数据库，并创建所需的表结构。你会看到 Flask 开发服务器启动的日志，它正在 `http://127.0.0.1:5001` 上监听。**请保持此终端窗口持续运行。**
+再打开一个终端，运行后台 worker：
+
+```bash
+python -m app.agent.worker
+```
+
+首次运行时，Web 层会检查数据库表结构。Agent/MCP 初始化只在 worker 中执行；如果没有 worker，前端可以创建任务但不会得到最终分析结果。请保持 Web 和 worker 两个终端窗口持续运行。
 
 10. 启动前端应用
 
@@ -334,7 +425,7 @@ python Run_causal.py
 3. 提交代码
 
 4. 新建 Pull Request
-   
+
 ## Star 趋势
 
 [![Star History Chart](https://api.star-history.com/svg?repos=Heyflyingpig/CausalAgent&type=Date)](https://star-history.com/#Heyflyingpig/CausalAgent&Date)
@@ -344,13 +435,14 @@ python Run_causal.py
 
 ```
 .
-├── CausalAgent.py           # Flask 入口
+├── Causalchat.py           # Flask 后端入口
 ├── Run_causal.py           # 桌面端启动入口（pywebview）
 ├── requirements.txt        # 完整依赖
 ├── requirements-base.txt   # 基础依赖（docker/生产使用）
 ├── Dockerfile
 ├── docker-compose.yml
 ├── docker-compose.prod.yml
+├── docker-compose.replica.yml # MySQL 主从开发拓扑
 ├── README.md               # 项目说明
 ├── database_init.log       # 数据库初始化日志
 ├── app/                    # Flask 应用主目录（Blueprint 结构）
@@ -373,12 +465,16 @@ python Run_causal.py
 │   ├── Report/             # 报告生成逻辑
 │   ├── knowledge_base/     # RAG 知识库
 │   │   ├── build_knowledge.py
+|   |   ├── query_rag.py
 │   │   ├── db/             # 向量知识库存储
 │   │   └── models/         # 嵌入模型
 │   └── tool_node/          # MCP 工具节点封装（task、rag 调用等）
 ├── Database/               # 数据库初始化与迁移逻辑
-│   ├── database_init.py    # 数据库初始化脚本
+│   ├── database_init.py    # 数据库初始化引导脚本
+│   ├── audit_before_db_upgrade.py # 数据库生产化升级前审计
+│   ├── monitoring.py       # 数据库轻量监控查询
 │   ├── agent_connect.py    # Langgraph checkpoint 相关数据库支持
+│   ├── mysql/              # MySQL 主从配置与初始化脚本
 │   └── migrations/         # Alembic 迁移脚本
 ├── config/                 # 全局配置
 │   └── settings.py
@@ -607,3 +703,37 @@ python Run_causal.py
   - 增加了轻量级融合重排逻辑，综合 dense 分数、sparse 分数、语料类型和双路命中情况得到最终 rerank_score。
   - 新增了评测脚本 rag_eval.py，当前支持检索层指标 Recall@k、Precision@k、MRR、Hit Rate，以及轻量级生成层关键点覆盖评测。
   - 新增了 metadata 导出脚本 export_metadata.py，
+
+---
+2026.5.17
+**重要更新**
+- 【内容新增与重构】：
+  - 建立了更完整的数据库迁移链：新增核心业务表基线迁移，并补上 checkpoint 迁移依赖关系。
+  - 将 `Database/database_init.py` 从“直接创建业务表”改为“数据库引导脚本”，业务表结构正式交给 Alembic 维护。
+  - 在 `app/db.py` 中完成数据库访问分层：写连接、业务读连接、复制状态检查连接三条路径分离，并加入连接池、弱一致读回退和慢查询告警。
+  - 新增主从开发拓扑 `docker-compose.replica.yml` 及 MySQL primary/replica 初始化脚本，支持 GTID、半同步复制、慢查询日志和应用侧读写分离验证。
+  - 新增数据库审计脚本、轻量监控接口和一组覆盖配置解析、连接边界、迁移链、主从初始化、失效会话保护的测试。
+  - 修复旧实现中多个容易在生产化阶段暴露的问题，包括：应用误用业务账号执行 `SHOW REPLICA STATUS`、数据库初始化职责和 Alembic 迁移职责重叠、旧 session 在用户数据失效后仍可能继续访问接口、上传文件缺少体积上限等。
+- 【修复问题】
+  - 修复数据库初始化与迁移职责重叠的问题
+   旧版 `Database/database_init.py` 同时负责建库、建表、建索引和部分结构逻辑，容易与 Alembic 演进冲突。现在它只负责确保数据库存在和连接可用，结构统一由迁移脚本维护。
+  - 修复主从读写边界不清的问题
+   旧代码主要通过单一路径访问 MySQL，主从环境下很难明确“哪些查询必须强一致、哪些查询允许弱一致”。本轮将强一致读、弱一致读和写入路径拆开，并在弱一致读失败时自动回退主库。
+  - 修复复制状态检查权限模型不干净的问题
+   旧设计容易让应用继续用业务账号执行 `SHOW REPLICA STATUS`。现在新增专用状态账号；未配置该账号时，系统会安全回退主库，而不是继续误用高权限账号。
+  - 修复旧 session 残留导致的伪登录状态问题
+   当浏览器 session 还在、但数据库中的用户已失效时，原逻辑可能继续把请求当作已登录。现在引入 `app/auth/session_guard.py`，会在鉴权时校验真实用户，不存在则清空 session。
+  - 修复上传文件缺少大小上限的问题
+   文件上传现在新增 `MAX_UPLOAD_SIZE_MB` / `MAX_UPLOAD_SIZE_BYTES` 限制，避免过大文件直接写入 `uploaded_files.file_content`。
+  - 修复迁移链起点不完整的问题
+   新增 `1a2b3c4d5e6f_create_core_schema.py` 作为核心 schema 基线，并让 checkpoint 迁移依赖它，避免空库初始化只能依赖历史手工建表。
+
+---
+2026.5.18
+**重要更新**
+- 【内容新增与重构】：
+  - 任务创建、任务领取、事件写入和 SSE 推送已经拆分到不同层，Web 不再直接承担长任务执行。
+  - 新增 `analysis_jobs` 与 `analysis_job_events` 数据库作为任务队列和事件流的持久化数据库。
+  - 后台 worker 以 slot 为单位持有独立 MCP session 和 Agent graph，避免 Web 进程阻塞。
+  - 同一 `user_id + session_id` 的并发任务通过唯一约束兜底，防止重复执行。
+  - 旧接口 `POST /api/send_stream` 已转为迁移提示，前端改走 `POST /api/agent/jobs` 与 SSE 订阅。

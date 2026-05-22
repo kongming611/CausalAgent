@@ -2,7 +2,7 @@
 用户认证路由
 """
 from flask import Blueprint, request, jsonify, session
-from app.auth.service import find_user, hash_password, register_user
+from app.auth.session_guard import get_current_session_user
 import bcrypt
 import logging
 
@@ -34,6 +34,8 @@ def handle_register():
     # if not any(c.isdigit() for c in plain_password):
     #     return jsonify({'success': False, 'error': '密码必须包含至少一个数字'}), 400
 
+    from app.auth.service import register_user
+
     success, message = register_user(username, plain_password)
     if success:
         return jsonify({'success': True})
@@ -47,6 +49,7 @@ def handle_login():
     处理用户登录请求。
     接收前端通过HTTPS发送的明文密码，使用bcrypt进行验证。
     """
+    from app.auth.service import find_user
 
 
     data = request.json
@@ -97,8 +100,9 @@ def handle_logout():
 def check_auth():
     """检查当前后端记录的登录状态"""
 
-    if 'user_id' in session and 'username' in session:
-        username = session['username']
+    current_user = get_current_session_user()
+    if current_user:
+        username = current_user['username']
         logging.debug(f"检查认证状态：用户 '{username}' (通过会话) 已登录")
         return jsonify({'isLoggedIn': True, 'username': username})
     else:

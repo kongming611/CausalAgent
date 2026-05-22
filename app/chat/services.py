@@ -4,7 +4,7 @@ app.chat.services - 聊天服务
 
 - 获取聊天记录
 '''
-from app.db import get_db_connection
+from app.db import get_read_connection, get_write_connection
 import mysql.connector
 import logging
 import json
@@ -13,7 +13,7 @@ def get_chat_history(session_id: str, user_id: int, limit: int) -> list:
     """从数据库获取指定会话的最近聊天记录。"""
     history = []
     try:
-        with get_db_connection() as conn:
+        with get_read_connection(consistency="strong") as conn:
             cursor = conn.cursor(dictionary=True)
             # 获取最近的 'limit' 条记录
             # 为什么这里需要先反转，再反转排序呢？
@@ -57,7 +57,7 @@ def save_chat(user_id, session_id, user_msg, ai_response):
     timestamp_dt = datetime.now()
 
     try:
-        with get_db_connection() as conn:
+        with get_write_connection() as conn:
             cursor = conn.cursor(dictionary=True)
 
             #  核心修改：实现延迟session创建逻辑 
@@ -164,8 +164,11 @@ def save_chat(user_id, session_id, user_msg, ai_response):
                 cursor.execute(sql_update_session, (timestamp_dt, session_id, user_id))
             
             conn.commit()
+            return True
     except mysql.connector.Error as e:
         logging.error(f"保存聊天记录到数据库时出错 (用户 ID: {user_id}, 会话: {session_id}): {e}")
+        return False
     except Exception as e:
         logging.error(f"保存聊天时发生未知错误: {e}")
+        return False
 

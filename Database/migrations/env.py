@@ -32,23 +32,25 @@ except ImportError:
     pass  # Docker环境下可能没有python-dotenv
 
 # 从环境变量读取配置
-mysql_host = os.environ.get('MYSQL_HOST')
-mysql_user = os.environ.get('MYSQL_USER')
-mysql_password = os.environ.get('MYSQL_PASSWORD')
+mysql_host = os.environ.get('MYSQL_WRITE_HOST') or os.environ.get('MYSQL_HOST')
+mysql_port = os.environ.get('MYSQL_PORT', '3306')
+mysql_user = os.environ.get('MYSQL_WRITE_USER') or os.environ.get('MYSQL_USER')
+mysql_password = os.environ.get('MYSQL_WRITE_PASSWORD') or os.environ.get('MYSQL_PASSWORD')
 mysql_database = os.environ.get('MYSQL_DATABASE')
 
 # 检查必需配置
 if not all([mysql_host, mysql_user, mysql_password, mysql_database]):
     raise ValueError(
         "缺少数据库配置环境变量。\n"
-        "请确保.env文件包含: MYSQL_HOST, MYSQL_USER, MYSQL_PASSWORD, MYSQL_DATABASE"
+        "请确保.env文件包含: MYSQL_HOST/MYSQL_WRITE_HOST, "
+        "MYSQL_WRITE_USER/MYSQL_USER, MYSQL_WRITE_PASSWORD/MYSQL_PASSWORD, MYSQL_DATABASE"
     )
 
 # 设置SQLAlchemy数据库连接URL
 # 格式：mysql+pymysql://user:password@host/database
 config.set_main_option(
     'sqlalchemy.url',
-    f"mysql+pymysql://{mysql_user}:{mysql_password}@{mysql_host}/{mysql_database}"
+    f"mysql+pymysql://{mysql_user}:{mysql_password}@{mysql_host}:{mysql_port}/{mysql_database}"
 )
 
 # add your model's MetaData object here

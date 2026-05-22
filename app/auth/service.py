@@ -6,7 +6,7 @@ app.auth.service - 用户认证服务
 - 注册用户
 
 '''
-from app.db import get_db_connection
+from app.db import get_write_connection
 import mysql.connector
 import logging
 import bcrypt
@@ -15,7 +15,7 @@ from mysql.connector import errorcode
 def find_user(username):
     try:
         # with提供一个临时变量，储存这个函数
-        with get_db_connection() as conn:
+        with get_write_connection() as conn:
             # 使用 dictionary=True 使 cursor 返回字典而不是元组，方便按列名访问
             cursor = conn.cursor(dictionary=True)
             cursor.execute("SELECT id, username, password_hash FROM users WHERE username = %s", (username,))
@@ -31,6 +31,16 @@ def find_user(username):
     except Exception as e:
         logging.error(f"查找用户 '{username}' 时发生未知错误: {e}")
         return None
+
+
+def find_user_by_id(user_id):
+    """按 ID 查找用户；未找到返回 None，数据库异常继续向上抛出。"""
+    with get_write_connection() as conn:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("SELECT id, username FROM users WHERE id = %s", (user_id,))
+        return cursor.fetchone()
+
+
 # 哈希密码
 def hash_password(password):
     hashed_password = bcrypt.hashpw(
@@ -55,7 +65,7 @@ def register_user(username, plain_password):
         return False, "用户名已被注册。"
 
     try:
-        with get_db_connection() as conn:
+        with get_write_connection() as conn:
             cursor = conn.cursor()
             # 使用 bcrypt 对明文密码进行哈希（包含自动生成的盐值）
             hashed_password = hash_password(plain_password)

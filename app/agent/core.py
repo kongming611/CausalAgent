@@ -66,32 +66,16 @@ def initialize_llm():
 
 async def initialize_mcp_connection(ready_event: threading.Event):
     """
-    在应用启动时启动MCP服务器并建立一个持久的会话。
-    完成后通过 event 通知主线程。
+    旧 Web 内执行模式使用的全局 MCP 初始化入口。
+
+    当前生产路径已经改为 worker slot 调用 open_mcp_session() 创建独立会话；
+    本函数仅保留给历史兼容或本地调试，不应由 Flask Web 入口自动调用。
+    完成后通过 ready_event 通知调用线程。
     """
     global mcp_session, mcp_tools
     logging.info("正在初始化持久 MCP 连接...")
     try:
-        
-        
-        server_params = StdioServerParameters(command=sys.executable, args=[mcp_server_path])
-        
-        read_stream, write_stream = await mcp_process_stack.enter_async_context(stdio_client(server_params))
-        session = await mcp_process_stack.enter_async_context(ClientSession(read_stream, write_stream))
-        
-        await session.initialize()
-        
-        tools_response = await session.list_tools()
-        mcp_tools = [{
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.inputSchema,
-            }
-        } for tool in tools_response.tools]
-
-        mcp_session = session
+        mcp_session, mcp_tools = await open_mcp_session(mcp_process_stack)
         logging.info(f"MCP服务器连接成功，会话已激活。发现工具: {[tool['function']['name'] for tool in mcp_tools]}")
         
     except Exception as e:
@@ -101,8 +85,40 @@ async def initialize_mcp_connection(ready_event: threading.Event):
         logging.info("MCP 初始化过程结束，通知主线程。")
         ready_event.set()
 
+
+async def open_mcp_session(process_stack: AsyncExitStack):
+    """
+    创建一组独立 MCP 进程和 ClientSession。
+
+    Web 旧模式只使用一个全局会话；worker 池会为每个 slot 调用本函数，
+    确保 slot = MCP session/process = graph instance。
+    """
+    server_params = StdioServerParameters(command=sys.executable, args=[mcp_server_path])
+    ## 这里enter_async_context(...) 会立刻执行它的 __aenter__()，真正打开资源
+    ## 同时，它的 __aexit__() 被登记到 process_stack这个栈，也就是只有__aexit__()被登记到栈里
+    read_stream, write_stream = await process_stack.enter_async_context(stdio_client(server_params))
+    session = await process_stack.enter_async_context(ClientSession(read_stream, write_stream))
+    await session.initialize()
+
+    tools_response = await session.list_tools()
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": tool.inputSchema,
+        }
+    } for tool in tools_response.tools]
+    return session, tools
+
 def shutdown_mcp_connection():
-    """在应用退出时，通过atexit钩子优雅地关闭MCP服务器子进程。"""
+    """
+    已废弃
+    关闭旧全局 MCP 会话。
+
+    当前 worker slot 使用自己的 AsyncExitStack 管理 MCP 生命周期；
+    本函数只对应 initialize_mcp_connection() 创建的历史全局会话。
+    """
     if background_loop and background_loop.is_running():
         logging.info("请求关闭 MCP 服务器...")
         future = asyncio.run_coroutine_threadsafe(mcp_process_stack.aclose(), background_loop)
@@ -115,7 +131,13 @@ def shutdown_mcp_connection():
         logging.warning("无法关闭 MCP 服务器：事件循环未运行。")
 
 def start_event_loop(loop: asyncio.AbstractEventLoop, ready_event: threading.Event):
-    """在一个线程中启动事件循环，并在启动时安排MCP初始化。"""
+    """
+    已废弃
+    旧 Web 内执行模式的后台事件循环启动器。
+
+    新的长任务队列模式不再让 Web 进程启动 MCP；worker 进程直接在
+    asyncio 主循环中为每个 slot 初始化 MCP session 和 Agent graph。
+    """
     global background_loop
     asyncio.set_event_loop(loop)
     background_loop = loop
@@ -206,12 +228,15 @@ class McpTool(BaseTool):
         return function_response_text
 
 
-async def ai_call_stream(text, user_id, username, session_id):
+async def ai_call_stream(text, user_id, username, session_id, graph=None):
     """
     流式版本的 ai_call，使用 astream() 捕获节点执行更新。
     这是一个生成器函数，会yield SSE格式的事件数据。
     """
     logging.info(f"[流式] 处理用户 {username} 的消息，会话ID: {session_id}")
+    target_graph = graph or agent_graph
+    if target_graph is None:
+        raise RuntimeError("Agent Graph 尚未初始化")
     
     # 配置：使用 session_id 作为 thread_id
     config = {
@@ -223,7 +248,7 @@ async def ai_call_stream(text, user_id, username, session_id):
     
     # 检查当前状态，判断是否是恢复中断的会话
     try:
-        state = await agent_graph.aget_state(config)
+        state = await target_graph.aget_state(config)
         ## 检查是否中断
         is_interrupted = state.next == () and state.tasks
         
@@ -321,7 +346,7 @@ async def ai_call_stream(text, user_id, username, session_id):
             logging.info(f"[SSE] 节点完成: {last_node} (耗时: {duration}s)")
         
         # 获取最终状态以检查interrupt
-        state = await agent_graph.aget_state(config)
+        state = await target_graph.aget_state(config)
         final_state_data = state.values
         
         # 检查是否有interrupt
